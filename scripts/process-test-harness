@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RESULT_DIRECTORY="${DATABASE_CLI_PROCESS_RESULT_DIRECTORY:-${TMPDIR:-/tmp}/database-cli-process-results}"
+WORK_ROOT=""
+DATABASE="${DATABASE_CLI_EXECUTABLE:-}"
+HELPER="${DATABASE_FDB_EXECUTABLE:-}"
+
+cleanup() {
+  if [[ -z "$WORK_ROOT" || ! -d "$WORK_ROOT" ]]; then
+    return
+  fi
+  local expected_prefix="${TMPDIR:-/tmp}/database-cli-process-test."
+  if [[ "$WORK_ROOT" != "$expected_prefix"* ]]; then
+    echo "error: refusing to remove unexpected harness path: $WORK_ROOT" >&2
+    return
+  fi
+  rm -rf -- "$WORK_ROOT"
+}
+
+trap cleanup EXIT
+
+for candidate in \
+    "$ROOT_DIR/.build/arm64-apple-macosx/debug/database" \
+    "$ROOT_DIR/.build/debug/database"; do
+  if [[ -z "$DATABASE" && -x "$candidate" ]]; then DATABASE="$candidate"; fi
+done
+if [[ -z "$DATABASE" || ! -x "$DATABASE" ]]; then
+  echo "error: database executable was not found; set DATABASE_CLI_EXECUTABLE" >&2
+  exit 2
+fi
+if [[ -z "$HELPER" ]]; then
+  HELPER="$(dirname "$DATABASE")/database-fdb"
+fi
+if [[ ! -x "$HELPER" ]]; then
+  echo "error: database-fdb executable was not found" >&2
+  exit 2
+fi
+
+WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/database-cli-process-test.XXXXXX")"
+mkdir -p "$RESULT_DIRECTORY"
+run_identifier="$(date -u +%Y%m%d-%H%M%S)-$$"
+log_path="$RESULT_DIRECTORY/Process-$run_identifier.log"
+
+run_and_capture() {
+  local name="$1"
+  shift
+  local stdout_path="$WORK_ROOT/$name.stdout"
+  local stderr_path="$WORK_ROOT/$name.stderr"
+  set +e
+  "$@" >"$stdout_path" 2>"$stderr_path"
+  local status=$?
+  set -e
+  printf '%s' "$status"
+}
+
+{
+  status="$(run_and_capture no-arguments "$DATABASE")"
+  [[ "$status" == "0" ]]
+  rg -q '^database — authenticated DatabaseWire command line$' "$WORK_ROOT/no-arguments.stdout"
+  [[ ! -s "$WORK_ROOT/no-arguments.stderr" ]]
+
+  status="$(run_and_capture invalid-command "$DATABASE" not-a-command)"
+  [[ "$status" == "2" ]]
+  [[ ! -s "$WORK_ROOT/invalid-command.stdout" ]]
+  [[ "$(rg -c '^error:' "$WORK_ROOT/invalid-command.stderr")" == "1" ]]
+
+  status="$(run_and_capture version "$DATABASE" --version)"
+  [[ "$status" == "0" ]]
+  [[ "$(tr -d '\n' <"$WORK_ROOT/version.stdout")" == "26.0808.0" ]]
+
+  status="$(run_and_capture delegated-version "$DATABASE" fdb --version)"
+  [[ "$status" == "0" ]]
+  [[ "$(tr -d '\n' <"$WORK_ROOT/delegated-version.stdout")" == "26.0808.0" ]]
+  [[ ! -s "$WORK_ROOT/delegated-version.stderr" ]]
+
+  status="$(run_and_capture helper-invalid "$DATABASE" fdb invalid command)"
+  [[ "$status" == "2" ]]
+  [[ "$(rg -c '^error:' "$WORK_ROOT/helper-invalid.stderr")" == "1" ]]
+
+  status="$(run_and_capture helper-version-mismatch env \
+    DATABASE_FDB_EXPECTED_VERSION=0 "$HELPER" --version)"
+  [[ "$status" == "9" ]]
+  rg -q 'versions do not match' "$WORK_ROOT/helper-version-mismatch.stderr"
+
+  isolated_bin="$WORK_ROOT/isolated-bin"
+  mkdir -p "$isolated_bin"
+  cp "$DATABASE" "$isolated_bin/database"
+  status="$(run_and_capture missing-helper "$isolated_bin/database" fdb --version)"
+  [[ "$status" == "8" ]]
+  [[ "$(rg -c '^error:' "$WORK_ROOT/missing-helper.stderr")" == "1" ]]
+
+  status="$(run_and_capture redaction env DATABASE_ACCESS_TOKEN=supersecret \
+    "$DATABASE" capabilities --endpoint http://127.0.0.1:1)"
+  [[ "$status" == "8" ]]
+  if rg -q 'supersecret' "$WORK_ROOT/redaction.stdout" "$WORK_ROOT/redaction.stderr"; then
+    echo "error: access token leaked to process output" >&2
+    exit 1
+  fi
+
+  history_path="$WORK_ROOT/history"
+  set +e
+  printf '%s\n' '--version' '\quit' | "$DATABASE" shell \
+    --persist-history --history-file "$history_path" \
+    >"$WORK_ROOT/shell.stdout" 2>"$WORK_ROOT/shell.stderr"
+  status=$?
+  set -e
+  [[ "$status" == "0" ]]
+  [[ "$(stat -f '%Lp' "$history_path")" == "600" ]]
+  [[ "$(tr -d '\n' <"$history_path")" == "--version" ]]
+  rg -q '^Database shell ' "$WORK_ROOT/shell.stderr"
+
+  if otool -L "$DATABASE" | rg -q 'libfdb_c'; then
+    echo "error: database unexpectedly links FoundationDB" >&2
+    exit 1
+  fi
+  otool -L "$HELPER" | rg -q 'libfdb_c'
+
+  echo "database=$DATABASE"
+  echo "database-fdb=$HELPER"
+  echo "process-contract=passed"
+} 2>&1 | tee "$log_path"
+
+echo "Database CLI process integration passed"
+echo "Log: $log_path"

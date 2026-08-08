@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TIMEOUT_SECONDS="${DATABASE_FDB_TEST_TIMEOUT_SECONDS:-180}"
+RESULT_DIRECTORY="${DATABASE_FDB_TEST_RESULT_DIRECTORY:-${TMPDIR:-/tmp}/database-cli-fdb-results}"
+WORK_ROOT=""
+CLUSTER_FILE=""
+HELPER="${DATABASE_FDB_EXECUTABLE:-}"
+FDBCLI_EXECUTABLE="${FDBCLI:-}"
+FDBSERVER_EXECUTABLE="${FDBSERVER:-}"
+
+timeout_command() {
+  local seconds="$1"
+  shift
+  perl -e 'alarm shift; exec @ARGV' "$seconds" "$@"
+}
+
+cleanup() {
+  if [[ -n "$CLUSTER_FILE" && -f "$CLUSTER_FILE" ]]; then
+    timeout_command 30 "$HELPER" cluster stop \
+      --cluster-file "$CLUSTER_FILE" >/dev/null 2>&1 || true
+  fi
+  if [[ -z "$WORK_ROOT" || ! -d "$WORK_ROOT" ]]; then
+    return
+  fi
+  local expected_prefix="${TMPDIR:-/tmp}/database-cli-fdb-test."
+  if [[ "$WORK_ROOT" != "$expected_prefix"* ]]; then
+    echo "error: refusing to remove unexpected harness path: $WORK_ROOT" >&2
+    return
+  fi
+  rm -rf -- "$WORK_ROOT"
+}
+
+trap cleanup EXIT
+
+for command in jq perl ruby; do
+  if ! command -v "$command" >/dev/null 2>&1; then
+    echo "error: required command not found: $command" >&2
+    exit 1
+  fi
+done
+
+find_executable() {
+  local current="$1"
+  shift
+  if [[ -n "$current" && -x "$current" ]]; then
+    printf '%s' "$current"
+    return
+  fi
+  local candidate
+  for candidate in "$@"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return
+    fi
+  done
+  return 1
+}
+
+FDBCLI_EXECUTABLE="$(find_executable "$FDBCLI_EXECUTABLE" \
+  "$(command -v fdbcli 2>/dev/null || true)" \
+  /usr/local/bin/fdbcli /opt/homebrew/bin/fdbcli /usr/bin/fdbcli)" || {
+  echo "error: required command not found: fdbcli" >&2
+  exit 1
+}
+FDBSERVER_EXECUTABLE="$(find_executable "$FDBSERVER_EXECUTABLE" \
+  "$(command -v fdbserver 2>/dev/null || true)" \
+  /usr/local/libexec/fdbserver /opt/homebrew/libexec/fdbserver \
+  /usr/sbin/fdbserver /usr/local/sbin/fdbserver)" || {
+  echo "error: required command not found: fdbserver" >&2
+  exit 1
+}
+
+if [[ -z "$HELPER" ]]; then
+  for candidate in \
+      "$ROOT_DIR/.build/arm64-apple-macosx/debug/database-fdb" \
+      "$ROOT_DIR/.build/debug/database-fdb"; do
+    if [[ -x "$candidate" ]]; then
+      HELPER="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z "$HELPER" || ! -x "$HELPER" ]]; then
+  echo "error: database-fdb executable was not found; set DATABASE_FDB_EXECUTABLE" >&2
+  exit 2
+fi
+
+WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/database-cli-fdb-test.XXXXXX")"
+mkdir -p "$RESULT_DIRECTORY"
+run_identifier="$(date -u +%Y%m%d-%H%M%S)-$$"
+log_path="$RESULT_DIRECTORY/FDB-$run_identifier.log"
+port="${FDB_TEST_PORT:-$(ruby -rsocket -e 'server = TCPServer.new("127.0.0.1", 0); puts server.addr[1]; server.close')}"
+
+{
+  echo "helper=$HELPER"
+  echo "helperVersion=$($HELPER --version)"
+  echo "fdbserver=$FDBSERVER_EXECUTABLE"
+  "$FDBSERVER_EXECUTABLE" --version
+  echo "port=$port"
+
+  init_json="$(timeout_command "$TIMEOUT_SECONDS" "$HELPER" cluster init \
+    --path "$WORK_ROOT" --port "$port")"
+  CLUSTER_FILE="$(printf '%s' "$init_json" | jq -er '.clusterFile')"
+  [[ "$CLUSTER_FILE" == "$WORK_ROOT/.database/fdb.cluster" ]]
+
+  start_json="$(timeout_command "$TIMEOUT_SECONDS" "$HELPER" cluster start \
+    --cluster-file "$CLUSTER_FILE")"
+  printf '%s' "$start_json" | jq -e '.ready == true and (.pid | type == "string")'
+  "$FDBCLI_EXECUTABLE" -C "$CLUSTER_FILE" --exec 'status minimal'
+
+  "$FDBCLI_EXECUTABLE" -C "$CLUSTER_FILE" \
+    --exec 'writemode on; set cli-test-key cli-test-value'
+  get_json="$(timeout_command "$TIMEOUT_SECONDS" "$HELPER" raw get \
+    --cluster-file "$CLUSTER_FILE" --key-utf8 cli-test-key \
+    --max-total-bytes 1024)"
+  printf '%s' "$get_json" | jq -e \
+    '.key == {"$type":"bytes","value":"Y2xpLXRlc3Qta2V5"} and .value == {"$type":"bytes","value":"Y2xpLXRlc3QtdmFsdWU"}'
+
+  range_json="$(timeout_command "$TIMEOUT_SECONDS" "$HELPER" raw range \
+    --cluster-file "$CLUSTER_FILE" --key-utf8 cli-test \
+    --limit 10 --max-total-bytes 4096)"
+  [[ "$(printf '%s\n' "$range_json" | sed '/^$/d' | wc -l | tr -d ' ')" == "1" ]]
+  printf '%s' "$range_json" | jq -e \
+    '.key.value == "Y2xpLXRlc3Qta2V5" and .value.value == "Y2xpLXRlc3QtdmFsdWU"'
+
+  stop_json="$(timeout_command "$TIMEOUT_SECONDS" "$HELPER" cluster stop \
+    --cluster-file "$CLUSTER_FILE")"
+  printf '%s' "$stop_json" | jq -e '.ready == false and .stopped == true'
+
+  if timeout_command 5 "$FDBCLI_EXECUTABLE" -C "$CLUSTER_FILE" \
+      --exec 'status minimal' >/dev/null 2>&1; then
+    echo "error: stopped cluster remains protocol-reachable" >&2
+    exit 1
+  fi
+  status_json="$(timeout_command "$TIMEOUT_SECONDS" "$HELPER" cluster status \
+    --cluster-file "$CLUSTER_FILE")"
+  printf '%s' "$status_json" | jq -e \
+    '.ready == false and .processAlive == false and .pid == null'
+  CLUSTER_FILE=""
+} 2>&1 | tee "$log_path"
+
+echo "FoundationDB integration passed"
+echo "Log: $log_path"
