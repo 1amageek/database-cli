@@ -136,6 +136,7 @@ set +e
     -scheme "$SCHEME" \
     -destination "$DESTINATION" \
     -derivedDataPath "$derived_data" \
+    -disablePackageRepositoryCache \
     -resultBundlePath "$build_result" \
     -enableCodeCoverage NO \
     -onlyUsePackageVersionsFromResolvedFile \

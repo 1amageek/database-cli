@@ -3,7 +3,7 @@ import Foundation
 import Synchronization
 
 public enum DatabaseCLIVersion {
-    public static let current = "26.0808.0"
+    public static let current = "26.0808.1"
 }
 
 public typealias RemoteSessionFactory = @Sendable (

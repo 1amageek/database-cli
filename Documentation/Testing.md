@@ -11,16 +11,26 @@ The harness performs one `build-for-testing`, injects the snapshot's
 `libTesting.dylib` path into every generated test target, then runs
 `test-without-building`. It requires the reviewed test count, zero failures,
 zero skips, zero expected failures, zero runtime warnings, and no internal tool
-errors. Local path dependencies are rejected unless
+errors. Dependency checkout bypasses Xcode's shared repository cache so a
+newly published package revision cannot be resolved from stale tag metadata
+without its commit tree. Local path dependencies are rejected unless
 `DATABASE_CLI_ALLOW_LOCAL_DEPENDENCIES=1` is explicitly set for diagnosis.
 
 Executable contracts use:
 
 ```bash
+swift build \
+  --scratch-path /tmp/database-cli-release-products \
+  --disable-dependency-cache \
+  --only-use-versions-from-resolved-file
 DATABASE_CLI_EXECUTABLE=/path/to/database \
 DATABASE_FDB_EXECUTABLE=/path/to/database-fdb \
 scripts/process-test-harness
 ```
+
+Use binaries from that exact URL-resolved build. The disabled dependency cache
+prevents stale tag metadata in a shared SwiftPM repository cache from selecting
+a revision whose commit tree has not been fetched.
 
 The process harness verifies stdout/stderr separation, stable exit codes,
 explicit shell launch, history permissions, secret redaction, companion version
