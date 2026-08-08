@@ -1,22 +1,106 @@
 # database-cli
 
-`database-cli` is the authenticated command-line client for the DatabaseWire
-protocol. The main `database` executable reaches database semantics exclusively
-through `DatabaseClient`; it does not import or link a storage backend.
-FoundationDB lifecycle and read-only diagnostics live in the adjacent,
-version-matched `database-fdb` companion.
+`database-cli` is the authenticated command-line interface for DatabaseWire.
+It provides one-shot commands, an explicit interactive shell, lossless typed
+input and output, bounded pagination, and a separately linked FoundationDB
+diagnostic companion.
 
-```text
-database command / shell
-        -> DatabaseClient
-            -> DatabaseWire v1
-                -> DatabaseServerRuntime
+Current release: `26.0808.1`
 
-database fdb ...
-        -> adjacent database-fdb
-            -> selected cluster file
-                -> FoundationDB read-only diagnostics
+```mermaid
+flowchart LR
+    CLI["database<br/>commands and shell"] --> Client["DatabaseClient"]
+    Client --> Wire["DatabaseWire v1<br/>13 operation families"]
+    Wire --> Runtime["DatabaseServerRuntime"]
+    Runtime --> Container["DBContainer<br/>indexes, graph, ontology"]
+
+    CLI --> Helper["database-fdb<br/>version-matched companion"]
+    Helper --> FDB["Explicit FoundationDB cluster<br/>bounded read-only diagnostics"]
 ```
+
+The main `database` executable never imports or links a storage backend. Remote
+commands always pass through the authenticated server runtime. FoundationDB
+lifecycle and read-only inspection are isolated in the adjacent
+`database-fdb` executable.
+
+## Requirements
+
+- macOS 26 or later;
+- the pinned Swift 6.4 development snapshot
+  `org.swift.64202607231a` for source builds;
+- an HTTP, HTTPS, WebSocket, or secure WebSocket DatabaseWire endpoint for
+  remote commands;
+- FoundationDB 7.3 client headers, library, `fdbserver`, and `fdbcli` only when
+  building or using `database-fdb`.
+
+## Build and install
+
+Build the remote client without linking FoundationDB:
+
+```bash
+export TOOLCHAINS=org.swift.64202607231a
+swift build \
+  --product database \
+  --disable-dependency-cache \
+  --only-use-versions-from-resolved-file
+```
+
+Build the FoundationDB companion separately:
+
+```bash
+export TOOLCHAINS=org.swift.64202607231a
+swift build \
+  --product database-fdb \
+  --disable-dependency-cache \
+  --only-use-versions-from-resolved-file
+```
+
+Install `database` and `database-fdb` in the same directory. Delegation through
+`database fdb ...` rejects a missing helper or a helper with a different CLI
+version. Use `swift build --show-bin-path` to locate the built products.
+
+Verify the installation before configuring a server:
+
+```bash
+database --version
+database
+database fdb --version
+```
+
+Running `database` without arguments prints help. It never enters interactive
+mode implicitly.
+
+## Quick start
+
+Create and select a routing profile, then store its access token in the macOS
+Keychain:
+
+```bash
+database profile create production \
+  --endpoint https://database.example.com/v1 \
+  --database main \
+  --tenant acme \
+  --workspace research
+database profile use production
+database auth login
+database capabilities
+```
+
+`database auth login` reads a token from a configured environment variable or
+from a non-echo terminal prompt. A bearer token is never accepted as a command
+argument.
+
+Run a query and a mutation:
+
+```bash
+database query sql 'SELECT * FROM Person' --page-size 100
+database query sparql @query.rq --output jsonl
+database mutate sparql @update.ru \
+  --idempotency-key update-2026-08-08
+```
+
+All structured inputs accept inline lossless typed JSON, `@path`, or `@-` for
+a bounded standard-input read.
 
 ## Command catalog
 
@@ -29,8 +113,14 @@ database
 ├── query sql|sparql
 ├── mutate sql|sparql
 ├── entity insert|update|upsert|delete|apply
-├── graph shortest-path|weighted-shortest-path|page-rank|community
-│         cycles|strongly-connected-components|topological-sort
+├── graph
+│   ├── shortest-path
+│   ├── weighted-shortest-path
+│   ├── page-rank
+│   ├── community
+│   ├── cycles
+│   ├── strongly-connected-components
+│   └── topological-sort
 ├── ontology describe|upsert|delete|reason|hierarchy|validate-schema
 ├── shacl describe|upsert|delete|validate
 ├── command run
@@ -39,47 +129,77 @@ database
 ├── maintenance compact
 ├── job status|wait|result|cancel
 ├── shell
-└── fdb cluster|catalog|raw
+└── fdb
+    ├── cluster init|start|stop|status
+    ├── catalog list|show
+    └── raw get|range
 ```
 
-Running `database` without arguments prints help. Interactive use is explicit:
+Remote families map directly to canonical DatabaseWire operations. Commands
+that support resumable execution accept `--as-job <kind>` only when the server
+advertises that exact operation family and job kind. `job wait` performs
+deadline-bounded status polling; it is not a separate wire operation.
+
+See [Command contract](Documentation/Commands.md) for positional arguments,
+family mapping, and operation-specific options.
+
+## Connection and authentication
+
+The selected profile is the normal connection source. A command may override
+its routing identity for one invocation:
+
+```text
+--profile <name>
+--endpoint <http[s]://...|ws[s]://...>
+--database <id>
+--tenant <id>
+--workspace <id>
+```
+
+The endpoint URL scheme selects HTTP or WebSocket transport. Both transports
+send the same database, tenant, and workspace routing headers. The CLI does not
+retry automatically, select another endpoint, or silently fall back to a
+different transport.
+
+Credential resolution order is:
+
+1. the selected profile's macOS Keychain item;
+2. the environment variable named by the profile;
+3. `DATABASE_ACCESS_TOKEN`;
+4. a non-echo terminal prompt.
+
+Profile files contain routing configuration only. Configuration directories use
+mode `0700`; profile and persistent-history files use mode `0600`.
+
+## Request metadata and execution budgets
+
+`--trace-id` and `--idempotency-key` are copied directly into
+`OperationRequestMetadata`. The five `ExecutionBudget` fields are exposed
+one-to-one:
+
+| Option | Default |
+|---|---:|
+| `--maximum-rows` | 10,000 |
+| `--maximum-work-units` | 1,000,000 |
+| `--maximum-intermediate-rows` | 10,000 |
+| `--maximum-intermediate-bytes` | 16 MiB |
+| `--timeout-milliseconds` | 30,000 |
+
+Failures are returned to the caller. Budget exhaustion, malformed input,
+authentication failure, transport failure, and unsupported capabilities are
+never converted into empty success.
+
+## Paging and continuations
+
+The default page size is 1,000 rows and the default invocation fetches one
+page. A continuation is emitted as unpadded base64url and can be supplied to a
+later invocation:
 
 ```bash
-database shell
+database query sql @query.sql --continuation <base64url>
 ```
 
-## Profiles and authentication
-
-```bash
-database profile create production \
-  --endpoint https://database.example.com/v1 \
-  --database main \
-  --tenant acme \
-  --workspace research
-database profile use production
-database auth login
-```
-
-Bearer tokens are never accepted as process arguments. Resolution precedence is
-the platform keychain, the profile-selected environment variable,
-`DATABASE_ACCESS_TOKEN`, then non-echo terminal input. Profile files contain
-routing configuration only and are written with mode `0600` beneath a `0700`
-directory.
-
-## Query and mutation
-
-```bash
-database query sql 'SELECT * FROM Person' --page-size 100
-database query sparql @query.rq --output jsonl
-database mutate sparql @update.ru --idempotency-key update-2026-08-08
-database entity insert Person \
-  '{"$type":"string","value":"person-1"}' \
-  @person.json
-```
-
-Structured values accept inline JSON, `@path`, or `@-` for standard input.
-Paging defaults to one page. Fetching every page requires all three aggregate
-limits:
+Fetching every page requires all three aggregate safety limits:
 
 ```bash
 database query sql @query.sql --all \
@@ -88,28 +208,180 @@ database query sql @query.sql --all \
   --max-pages 100
 ```
 
-## Output
+`--all` cannot be combined with an initial continuation. Each result page is
+rendered and released before the next page is requested; the CLI does not
+materialize the complete result set.
 
-TTY output defaults to `table`; redirected output defaults to lossless tagged
-`jsonl`. Use `--output table|jsonl|json|csv|nquads` to fix a format. Standard
-output contains results only, while diagnostics and non-row paging metadata use
-standard error. CSV accepts scalar rows only. N-Quads accepts RDF results only.
+## Lossless typed values
+
+Every `FieldValue` case has an explicit `$type`. Untagged JSON numbers are
+rejected, so integers, decimals, floating-point bit patterns, bytes, vectors,
+references, RDF terms, arrays, and objects preserve their exact identity.
+
+```json
+{"$type":"int64","value":"-9223372036854775808"}
+```
+
+```json
+{"$type":"float64","bits":"3ff0000000000000"}
+```
+
+```json
+{"$type":"bytes","value":"AAEC_w"}
+```
+
+The decoder rejects duplicate keys, unknown tags, non-canonical integers,
+out-of-range values, non-finite values, invalid base64url, and configured byte
+or nesting-limit violations. See [Lossless typed JSON](Documentation/TypedJSON.md)
+for the complete representation contract.
+
+## Output contract
+
+TTY output defaults to `table`; redirected output defaults to lossless `jsonl`.
+Use `--output table|jsonl|json|csv|nquads` to fix a format.
+
+| Stream or format | Contract |
+|---|---|
+| `stdout` | result payloads only |
+| `stderr` | diagnostics, timing, prompts, and non-row paging metadata |
+| `jsonl` | one lossless typed value per line |
+| `json` | incrementally written JSON array |
+| `csv` | scalar rows only; other results fail |
+| `nquads` | RDF results only; other results fail |
+
+Broken pipes and partial-output failures are reported as failures. Large query,
+RDF, graph, ontology, and SHACL result paths consume retained iterators one
+element at a time.
+
+## Interactive shell
+
+Start the shell explicitly:
+
+```bash
+database shell
+```
+
+The shell uses the same command parser and executor as one-shot invocations.
+`query sql`, `query sparql`, `mutate sql`, and `mutate sparql` enter multiline
+mode when no statement is supplied. A semicolon does not execute a buffer;
+use `\g` explicitly.
+
+```text
+\help
+\profile <name>
+\output table|jsonl|json|csv|nquads
+\timing on|off
+\budget
+\page-size <count>
+\next
+\history
+\mode command
+\g
+\clear
+\quit
+```
+
+`\next` replays the immediately preceding request with its detached
+continuation. The shell does not keep a server-side transaction alive and does
+not provide `begin`, `commit`, or `rollback` commands.
+
+History is memory-only by default. `--persist-history` enables a mode-`0600`
+history file; authentication commands are never recorded. Ctrl-C cancels the
+active request or clears the current input buffer. Ctrl-D exits the shell.
 
 ## FoundationDB diagnostics
+
+`database fdb ...` delegates to the adjacent, version-matched `database-fdb`
+binary.
 
 ```bash
 database fdb cluster init --path /srv/database --port 4690
 database fdb cluster start --path /srv/database
 database fdb cluster status --path /srv/database
-database fdb raw get --cluster-file /srv/database/.database/fdb.cluster \
-  --key-hex 01636174616c6f67 --max-total-bytes 1048576
+database fdb catalog list \
+  --cluster-file /srv/database/.database/fdb.cluster
+database fdb raw get \
+  --cluster-file /srv/database/.database/fdb.cluster \
+  --key-hex 01636174616c6f67 \
+  --max-total-bytes 1048576
+database fdb raw range \
+  --cluster-file /srv/database/.database/fdb.cluster \
+  --key-utf8 catalog \
+  --limit 100 \
+  --max-total-bytes 1048576
 database fdb cluster stop --path /srv/database
 ```
 
 Raw keys require exactly one of `--key-hex`, `--key-utf8`, or `--key-tuple`.
-Raw range reads require both row and byte limits. No raw write, delete, or clear
-command exists. An explicit missing cluster file is an error; the helper never
-falls back to the default FoundationDB cluster.
+Range reads require both row and total-byte limits. Raw write, delete, and clear
+commands do not exist.
+
+An explicit missing or unreachable cluster file is a typed failure. The helper
+never falls back to the system default cluster. Readiness requires a real
+`fdbcli` protocol probe, and stop completes only after both the process and
+protocol endpoint are unreachable.
+
+## Exit codes
+
+| Code | Meaning |
+|---:|---|
+| `0` | success |
+| `2` | input or configuration |
+| `3` | authentication |
+| `4` | authorization |
+| `5` | not found |
+| `6` | conflict or constraint |
+| `7` | resource limit |
+| `8` | transport or unavailable |
+| `9` | protocol or internal failure |
+| `130` | cancellation |
+
+## Shell completions
+
+Generated completion definitions are included for Bash, Zsh, and Fish:
+
+```text
+Completions/database.bash
+Completions/_database
+Completions/database.fish
+```
+
+Install or source the file using the normal completion directory for the
+selected shell.
+
+## Verification
+
+Use the pinned toolchain and strict Xcode harness:
+
+```bash
+export TOOLCHAINS=org.swift.64202607231a
+scripts/xcode-test-harness
+```
+
+The harness resolves URL dependencies without using Xcode's shared repository
+cache, builds once, injects the matching Swift Testing runtime, and runs the
+generated `.xctestrun` without rebuilding. The reviewed contract is 25 tests,
+130 dynamic parameter runs, zero failures, zero skips, zero expected failures,
+zero runtime warnings, and no internal tool errors.
+
+Process and real FoundationDB integration use the exact binaries from the
+URL-resolved build:
+
+```bash
+export DATABASE_CLI_EXECUTABLE=/path/to/database
+export DATABASE_FDB_EXECUTABLE=/path/to/database-fdb
+scripts/process-test-harness
+scripts/fdb-test-harness
+```
+
+The process harness verifies stdout/stderr separation, exit codes, explicit
+shell launch, history permissions, secret redaction, helper version matching,
+and FoundationDB link separation. The FoundationDB harness provisions an
+isolated FoundationDB 7.3 cluster, verifies protocol readiness, exercises
+selected-cluster reads, stops the service, and requires negative readiness.
+
+See [Testing and release](Documentation/Testing.md) for artifact and release
+requirements.
 
 ## Documentation
 
@@ -121,4 +393,4 @@ falls back to the default FoundationDB cluster.
 
 ## License
 
-See the repository license file.
+See [LICENSE](LICENSE).
