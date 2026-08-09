@@ -6,8 +6,9 @@
   JSON, output rendering, shell state, and FoundationDB diagnostic composition.
 - The `database` executable invokes canonical operations through
   `DatabaseClient`; it never imports or links a storage backend.
-- The `database-fdb` companion exclusively owns local FoundationDB lifecycle,
-  catalog inspection, and bounded read-only raw inspection.
+- The `database-fdb` companion exclusively owns local FoundationDB cluster
+  lifecycle, catalog inspection, and bounded read-only raw inspection. Native
+  database serving selects its backend in the adjacent `database-server`.
 - Command mode and shell mode use the same parser and executor.
 
 ## Security and data contracts
@@ -38,6 +39,6 @@
 - FoundationDB integration uses `scripts/fdb-test-harness`, an isolated cluster
   file, protocol readiness, authoritative shutdown, and negative readiness
   after teardown.
-- Before release, `Package.swift` must contain URL dependencies only. Both
+- Before release, `Package.swift` must contain URL dependencies only. All three
   executable products must be built, and the main `database` binary must not
   link FoundationDB.

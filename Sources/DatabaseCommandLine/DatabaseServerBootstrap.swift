@@ -3,7 +3,7 @@ import Foundation
 struct DatabaseServerBootstrap: Sendable {
     struct Request: Sendable {
         let configurationURL: URL
-        let databasePath: String?
+        let storageArguments: [String]
         let host: String?
         let port: Int?
         let databaseID: String
@@ -108,9 +108,7 @@ struct DatabaseServerBootstrap: Sendable {
             "--config", request.configurationURL.path,
             "--database", request.databaseID,
         ]
-        if let databasePath = request.databasePath {
-            arguments.append(contentsOf: ["--path", databasePath])
-        }
+        arguments.append(contentsOf: request.storageArguments)
         if let host = request.host {
             arguments.append(contentsOf: ["--host", host])
         }

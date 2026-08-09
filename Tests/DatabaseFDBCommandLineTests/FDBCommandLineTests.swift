@@ -14,7 +14,12 @@ private let fdbCommandFixtures: [FDBCommandFixture] = [
     .init(arguments: ["--help"], path: ["help"]),
     .init(arguments: ["--version"], path: ["version"]),
     .init(arguments: ["cluster", "init"], path: ["cluster", "init"]),
-    .init(arguments: ["cluster", "start"], path: ["cluster", "start"]),
+    .init(
+        arguments: [
+            "cluster", "start", "--minimum-available-space-ratio", "0.0",
+        ],
+        path: ["cluster", "start"]
+    ),
     .init(arguments: ["cluster", "stop"], path: ["cluster", "stop"]),
     .init(arguments: ["cluster", "status"], path: ["cluster", "status"]),
     .init(arguments: ["catalog", "list"], path: ["catalog", "list"]),

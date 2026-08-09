@@ -21,7 +21,9 @@ DatabaseServerExecutable
 └── DatabaseServerHost
     ├── DatabaseServerApplication
     ├── DatabaseServerRuntime
-    └── SQLiteStorage
+    ├── SQLiteStorage
+    ├── PostgreSQLStorage
+    └── FDBStorage
 
 DatabaseFDBExecutable
 ├── DatabaseCommandLine
@@ -33,8 +35,10 @@ DatabaseFDBExecutable
 
 The executable split is a link-time boundary. `database` links neither a
 storage backend nor `libfdb_c`. `database-server` owns native hosting and
-SQLite; `database-fdb` alone links FoundationDB. Both companions must be in the
-same installation directory and exactly match the CLI version.
+selects SQLite, PostgreSQL, or FoundationDB through injected `StorageEngine`
+implementations. `database-fdb` separately owns FoundationDB cluster lifecycle
+and bounded read-only diagnostics. Both companions must be in the same
+installation directory and exactly match the CLI version.
 
 ## Remote execution flow
 
@@ -56,14 +60,14 @@ their canonical wire meaning.
 ## Standalone execution flow
 
 ```text
-database open <path>|--memory
+database open <SQLite path>|--memory|--storage <backend> <backend options>
     -> adjacent version check
         -> database-server stdio
             -> private framed-stream transport
                 -> empty or persisted schema generation
                     -> shared shell parser and executor
 
-database serve <path> --profile <name>
+database serve [storage options] --profile <name>
     -> private bootstrap pipe
         -> profile and Keychain commit
             -> credential acknowledgement
@@ -72,9 +76,10 @@ database serve <path> --profile <name>
 ```
 
 The CLI owns profile, Keychain, shell, and child-process UX. The server owns
-listener, TLS, authentication, routing, signals, runtime composition, and
-authoritative storage shutdown. Database semantics do not move into either
-process adapter.
+listener, TLS, authentication, routing, signals, native backend construction,
+runtime composition, and authoritative storage shutdown. The backend is
+selected before runtime creation and never changes through silent fallback.
+Database semantics do not move into either process adapter.
 
 ## Streaming and ownership
 

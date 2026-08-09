@@ -5,21 +5,10 @@ struct LocalDatabaseSession: Sendable {
 
     static func open(
         executable: DatabaseServerExecutable,
-        path: String?,
-        memory: Bool,
+        storage: StandaloneStorageSelection,
         maximumFrameBytes: Int
     ) async throws -> Self {
-        var arguments = ["stdio"]
-        if memory {
-            arguments.append("--memory")
-        } else if let path {
-            arguments.append(contentsOf: ["--path", path])
-        } else {
-            throw DatabaseCLIError(
-                .input,
-                "database open requires a path or '--memory'"
-            )
-        }
+        var arguments = ["stdio"] + storage.serverArguments
         arguments.append(contentsOf: [
             "--maximum-frame-bytes",
             String(maximumFrameBytes),

@@ -4,7 +4,7 @@ import Foundation
 import Synchronization
 
 public enum DatabaseCLIVersion {
-    public static let current = "26.0809.0"
+    public static let current = "26.0809.1"
 }
 
 public typealias RemoteSessionFactory = @Sendable (
@@ -130,14 +130,7 @@ extension DatabaseCLIApplication {
     }
 
     func executeOpen(_ command: ParsedCommand) async throws {
-        let memory = command.options.contains("memory")
-        let path = command.positionals.first
-        guard memory != (path != nil) else {
-            throw DatabaseCLIError(
-                .input,
-                "Exactly one database path or '--memory' is required"
-            )
-        }
+        let storage = try StandaloneStorageSelection.resolve(command)
         let maximumFrameBytes = try command.options.integer(
             "maximum-frame-bytes",
             default: 16 * 1_024 * 1_024
@@ -150,8 +143,7 @@ extension DatabaseCLIApplication {
         }
         let local = try await LocalDatabaseSession.open(
             executable: DatabaseServerExecutable.adjacent(),
-            path: path,
-            memory: memory,
+            storage: storage,
             maximumFrameBytes: maximumFrameBytes
         )
         do {
@@ -193,25 +185,27 @@ extension DatabaseCLIApplication {
             throw DatabaseCLIError(.input, "Database serve requires '--profile'")
         }
         let explicitConfiguration = command.options.value("config")
-        let databasePath = command.positionals.first.map {
-            URL(fileURLWithPath: $0).standardizedFileURL.path
-        }
-        if explicitConfiguration != nil, databasePath != nil {
-            throw DatabaseCLIError(
-                .input,
-                "A database path cannot be combined with '--config'"
-            )
-        }
-        if explicitConfiguration == nil, databasePath == nil {
-            throw DatabaseCLIError(
-                .input,
-                "Database serve requires a path or '--config'"
-            )
-        }
         let configurationURL = try serverConfigurationURL(
             explicit: explicitConfiguration,
             profileName: profileName
         )
+        let hasStorageSelection = StandaloneStorageSelection
+            .hasExplicitSelection(command)
+        if explicitConfiguration != nil, hasStorageSelection {
+            throw DatabaseCLIError(
+                .input,
+                "Storage options cannot be combined with '--config'"
+            )
+        }
+        let storageArguments: [String]
+        if explicitConfiguration != nil
+            || (!hasStorageSelection
+                && FileManager.default.fileExists(atPath: configurationURL.path)) {
+            storageArguments = []
+        } else {
+            storageArguments = try StandaloneStorageSelection
+                .resolve(command).serverArguments
+        }
         let listener = try command.options.value("listen")
             .map(parseListener)
         let executable = try DatabaseServerExecutable.adjacent()
@@ -229,7 +223,7 @@ extension DatabaseCLIApplication {
             ).prepare(
                 request: .init(
                     configurationURL: configurationURL,
-                    databasePath: databasePath,
+                    storageArguments: storageArguments,
                     host: listener?.host,
                     port: listener?.port,
                     databaseID: command.options.value("database") ?? "main",

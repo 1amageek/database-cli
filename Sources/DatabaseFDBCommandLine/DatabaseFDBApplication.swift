@@ -62,7 +62,23 @@ private extension DatabaseFDBApplication {
                 explicit: command.option("cluster-file"),
                 basePath: command.option("path")
             )
-            let pid = try await cluster.start(clusterFile: clusterFile)
+            let minimumAvailableSpaceRatio: Double?
+            if let rawRatio = command.option("minimum-available-space-ratio") {
+                guard let ratio = Double(rawRatio), ratio.isFinite,
+                      (0...1).contains(ratio) else {
+                    throw FDBCLIError(
+                        .input,
+                        "Minimum available space ratio must be between 0 and 1"
+                    )
+                }
+                minimumAvailableSpaceRatio = ratio
+            } else {
+                minimumAvailableSpaceRatio = nil
+            }
+            let pid = try await cluster.start(
+                clusterFile: clusterFile,
+                minimumAvailableSpaceRatio: minimumAvailableSpaceRatio
+            )
             try output.json([
                 "clusterFile": clusterFile,
                 "pid": String(pid),

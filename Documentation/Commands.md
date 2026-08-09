@@ -22,6 +22,22 @@ composition commands. `open` and `serve` launch the adjacent native server;
 `inspect` and `doctor` compose existing read-only operations; completion is
 generated from the immutable command catalog.
 
+## Standalone storage selection
+
+`open` and a new `serve` configuration accept the same storage contract:
+
+| Backend | Required input |
+|---|---|
+| SQLite | one positional path or `--memory` |
+| PostgreSQL | exactly one of `--postgres-host` / `--postgres-unix-socket`, plus `--postgres-user` and `--postgres-database` |
+| FoundationDB | `--fdb-cluster-file` |
+
+The selection is passed to the adjacent Server; the CLI never constructs a
+`StorageEngine`. Backend-specific options from another selection are rejected.
+An existing `serve` configuration is authoritative and can be restarted
+without restating its storage options. `--database` is routing metadata and is
+not a storage selector.
+
 `doctor` evaluates the following ordered boundaries without issuing a write:
 
 ```text

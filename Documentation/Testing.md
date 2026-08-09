@@ -7,6 +7,11 @@ export TOOLCHAINS=org.swift.64202607231a
 scripts/xcode-test-harness
 ```
 
+Set `XCODE_TEST_DERIVED_DATA_PATH` to an already attributed URL-resolved
+DerivedData directory to reuse compiled dependencies. The harness still runs
+`build-for-testing`, injects the pinned testing runtime, and executes
+`test-without-building`; it does not trust a compile-only result.
+
 The harness performs one `build-for-testing`, injects the snapshot's
 `libTesting.dylib` path into every generated test target, then runs
 `test-without-building`. It requires the reviewed test count, zero failures,
@@ -46,6 +51,20 @@ failure, standalone memory/file execution, child shutdown, a real
 authenticated `database serve` round trip, negative readiness, disposable
 profile/Keychain cleanup, and link separation.
 
+Native backend integration is owned by the adjacent Server package and uses
+the exact same three binaries:
+
+```bash
+DATABASE_CLI_EXECUTABLE=/path/to/database \
+DATABASE_SERVER_EXECUTABLE=/path/to/database-server \
+DATABASE_FDB_EXECUTABLE=/path/to/database-fdb \
+../database-server/scripts/storage-test-harness
+```
+
+It opens SQLite, an isolated PostgreSQL 16 Unix-socket instance, and an
+explicit isolated FoundationDB 7.3 cluster through `database open`, then proves
+the external services are unreachable after teardown.
+
 FoundationDB integration uses an isolated cluster:
 
 ```bash
@@ -62,7 +81,8 @@ Before tagging:
 1. verify `Package.swift` contains URL dependencies only;
 2. run the strict Xcode, process, and FoundationDB harnesses;
 3. verify the CLI and native server versions match;
-4. verify `database` does not link `libfdb_c` and `database-fdb` does;
+4. verify `database` does not link `libfdb_c`, while the native server and
+   `database-fdb` companion do;
 5. inspect the `.xcresult` summary and preserved logs;
 6. push the commit, create the release tag, and verify the tag commit equals
    `origin/main`.

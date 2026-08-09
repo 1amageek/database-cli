@@ -49,7 +49,10 @@ struct LocalFDBCluster: Sendable {
         }
     }
 
-    func start(clusterFile: String) async throws -> Int32 {
+    func start(
+        clusterFile: String,
+        minimumAvailableSpaceRatio: Double? = nil
+    ) async throws -> Int32 {
         let cluster = URL(fileURLWithPath: clusterFile).standardized
         guard FileManager.default.fileExists(atPath: cluster.path) else {
             throw FDBCLIError(.notFound, "Cluster file does not exist: \(cluster.path)")
@@ -74,13 +77,19 @@ struct LocalFDBCluster: Sendable {
         )
         let process = Process()
         process.executableURL = URL(fileURLWithPath: server)
-        process.arguments = [
+        var arguments = [
             "-p", "auto:\(port)",
             "-i", machineID,
             "-C", cluster.path,
             "-d", directory.appendingPathComponent("data").path,
             "-L", directory.appendingPathComponent("logs").path,
         ]
+        if let minimumAvailableSpaceRatio {
+            arguments.append(
+                "--knob_min_available_space_ratio=\(minimumAvailableSpaceRatio)"
+            )
+        }
+        process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
         let serverErrorURL = directory
             .appendingPathComponent("logs", isDirectory: true)
@@ -539,10 +548,11 @@ private extension LocalFDBCluster {
                   let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let client = root["client"] as? [String: Any],
                   let databaseStatus = client["database_status"] as? [String: Any],
-                  let available = databaseStatus["available"] as? Bool else {
+                  let available = databaseStatus["available"] as? Bool,
+                  let healthy = databaseStatus["healthy"] as? Bool else {
                 return false
             }
-            return available
+            return available && healthy
         } catch {
             return false
         }

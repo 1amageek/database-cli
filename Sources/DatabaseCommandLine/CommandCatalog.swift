@@ -192,18 +192,84 @@ private extension CommandCatalog {
             )
         }
 
+        let standaloneStorageOptions: [CommandOptionDescriptor] = [
+            .value(
+                "storage",
+                "sqlite|postgresql|foundationdb",
+                summary: "Select the standalone storage backend.",
+                defaultValue: "sqlite"
+            ),
+            .flag(
+                "memory",
+                summary: "Use process-local SQLite memory storage."
+            ),
+            .value(
+                "postgres-host",
+                "host",
+                summary: "Connect to PostgreSQL over TCP."
+            ),
+            .value(
+                "postgres-port",
+                "port",
+                summary: "Set the PostgreSQL TCP port.",
+                defaultValue: "5432"
+            ),
+            .value(
+                "postgres-unix-socket",
+                "path",
+                summary: "Connect through a PostgreSQL Unix socket."
+            ),
+            .value(
+                "postgres-user",
+                "name",
+                summary: "Set the PostgreSQL role."
+            ),
+            .value(
+                "postgres-password-file",
+                "path",
+                summary: "Read the PostgreSQL password from an owner-only file."
+            ),
+            .value(
+                "postgres-database",
+                "name",
+                summary: "Set the PostgreSQL database."
+            ),
+            .value(
+                "postgres-table",
+                "name",
+                summary: "Set the PostgreSQL storage table.",
+                defaultValue: "kv_store"
+            ),
+            .value(
+                "postgres-schema-management",
+                "create-if-needed|assume-exists",
+                summary: "Select PostgreSQL table provisioning behavior.",
+                defaultValue: "create-if-needed"
+            ),
+            .value(
+                "postgres-tls",
+                "disable|require",
+                summary: "Select PostgreSQL transport security.",
+                defaultValue: "disable"
+            ),
+            .value(
+                "fdb-cluster-file",
+                "path",
+                summary: "Select an explicit FoundationDB cluster."
+            ),
+        ]
+
         add(["help"], 0...3, usage: "[command]", summary: "Show command-specific help.")
         add(["version"], 0...0, usage: "", summary: "Show the CLI version.")
         add(["capabilities"], 0...0, usage: "", summary: "Describe server capabilities.", capability: "capabilities.describe")
-        add(["open"], 0...1, usage: "[path] [--memory]", summary: "Open a standalone database in an interactive shell.", options: [
-            .flag("memory", summary: "Use a process-local in-memory database."),
+        add(["open"], 0...1, usage: "[path] [storage options]", summary: "Open a standalone database in an interactive shell.", options: standaloneStorageOptions + [
             .value("schema", "manifest", summary: "Validate and apply a strict Schema JSON manifest before opening the shell."),
             .value("mode", "mode", summary: "Select the initial shell mode.", defaultValue: "sql-query"),
             .value("maximum-frame-bytes", "bytes", summary: "Bound one private DatabaseWire frame.", defaultValue: "16777216"),
             .value("history-file", "path", summary: "Select the persistent history file."),
             .flag("persist-history", summary: "Persist non-credential command history."),
         ])
-        add(["serve"], 0...1, usage: "[path] --profile <name>", summary: "Run a standalone database server in the foreground.", options: [
+        add(["serve"], 0...1, usage: "[path] --profile <name> [storage options]", summary: "Run a standalone database server in the foreground.", options: standaloneStorageOptions + [
             .value("profile", "name", summary: "Create or use the client profile for this server.", required: true),
             .value("config", "path", summary: "Use an explicit server configuration instead of the profile-owned configuration."),
             .value("listen", "host:port", summary: "Override the listener address."),

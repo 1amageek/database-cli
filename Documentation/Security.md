@@ -38,6 +38,15 @@ Non-loopback binding requires TLS, authentication, and complete routing before
 the socket is created. There is no unauthenticated flag or default-database
 fallback.
 
+## Storage credentials and identity
+
+The PostgreSQL password value is never accepted through argv, environment
+variables, profiles, or server configuration. `--postgres-password-file`
+passes only a path; the Server opens the target without following the final
+symbolic link and requires an owner-owned mode-`0600` regular file. The
+FoundationDB production backend requires an explicit cluster file and never
+opens the system default cluster as a fallback.
+
 ## Files
 
 Profile and persistent-history parent directories use mode `0700`; files use
@@ -47,7 +56,7 @@ valid file.
 
 ## FoundationDB
 
-The FoundationDB companion accepts an explicit cluster file or discovers only
+The FoundationDB diagnostic companion accepts an explicit cluster file or discovers only
 `.database/fdb.cluster` while walking parents. An explicit missing file never
 falls back to the system default cluster. Raw diagnostics are read-only and
 bounded by row and byte limits. The FoundationDB client opens the selected

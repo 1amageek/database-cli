@@ -80,6 +80,22 @@ private let commandFixtures: [CommandFixture] = [
     .init(arguments: ["open", "database.sqlite"], path: ["open"]),
     .init(arguments: ["open", "--memory"], path: ["open"]),
     .init(
+        arguments: [
+            "open", "--storage", "postgresql",
+            "--postgres-host", "db.test",
+            "--postgres-user", "database",
+            "--postgres-database", "database",
+        ],
+        path: ["open"]
+    ),
+    .init(
+        arguments: [
+            "open", "--storage", "foundationdb",
+            "--fdb-cluster-file", "/tmp/fdb.cluster",
+        ],
+        path: ["open"]
+    ),
+    .init(
         arguments: ["serve", "database.sqlite", "--profile", "local"],
         path: ["serve"]
     ),
@@ -162,7 +178,7 @@ func parameterInputContractsAreCatalogDriven() throws {
 }
 
 @Test("Required command options are reported before wire construction")
-func requiredOptionsAreValidatedByCatalog() {
+func requiredOptionsAreValidatedByCatalog() throws {
     #expect(throws: DatabaseCLIError.self) {
         try CommandParser().parse(["graph", "shortest-path"])
     }
@@ -174,6 +190,38 @@ func requiredOptionsAreValidatedByCatalog() {
     }
     #expect(throws: DatabaseCLIError.self) {
         try CommandParser().parse(["serve", "database.sqlite"])
+    }
+    let parser = CommandParser()
+    let postgreSQL = try StandaloneStorageSelection.resolve(
+        parser.parse([
+            "open", "--storage", "postgresql",
+            "--postgres-host", "db.test",
+            "--postgres-port", "5433",
+            "--postgres-user", "database",
+            "--postgres-database", "database",
+        ])
+    )
+    #expect(postgreSQL.serverArguments.contains("postgresql"))
+    #expect(postgreSQL.serverArguments.contains("5433"))
+
+    let foundationDB = try StandaloneStorageSelection.resolve(
+        parser.parse([
+            "open", "--storage", "foundationdb",
+            "--fdb-cluster-file", "/tmp/fdb.cluster",
+        ])
+    )
+    #expect(foundationDB.serverArguments.contains("foundationdb"))
+    #expect(foundationDB.serverArguments.contains("/tmp/fdb.cluster"))
+
+    #expect(throws: DatabaseCLIError.self) {
+        try StandaloneStorageSelection.resolve(
+            parser.parse(["open", "--storage", "postgresql", "db.sqlite"])
+        )
+    }
+    #expect(throws: DatabaseCLIError.self) {
+        try StandaloneStorageSelection.resolve(
+            parser.parse(["open", "--storage", "foundationdb"])
+        )
     }
 }
 

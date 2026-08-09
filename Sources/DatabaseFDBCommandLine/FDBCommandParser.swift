@@ -24,7 +24,10 @@ struct FDBCommandParser: Sendable {
         case ["cluster", "init"]:
             allowed = ["path", "port"]
             positionalRange = 0...0
-        case ["cluster", "start"], ["cluster", "stop"], ["cluster", "status"]:
+        case ["cluster", "start"]:
+            allowed = ["path", "cluster-file", "minimum-available-space-ratio"]
+            positionalRange = 0...0
+        case ["cluster", "stop"], ["cluster", "status"]:
             allowed = ["path", "cluster-file"]
             positionalRange = 0...0
         case ["catalog", "list"]:
@@ -85,7 +88,9 @@ struct FDBCommandParser: Sendable {
         """
         Usage:
           database fdb cluster init [--path <directory>] [--port <port>]
-          database fdb cluster start|stop|status [--path <directory>]
+          database fdb cluster start [--path <directory>]
+                    [--minimum-available-space-ratio <ratio>]
+          database fdb cluster stop|status [--path <directory>]
           database fdb catalog list [--cluster-file <path>]
           database fdb catalog show <entity> [--cluster-file <path>]
           database fdb raw get --key-hex|--key-utf8|--key-tuple <value>

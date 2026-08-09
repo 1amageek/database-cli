@@ -5,7 +5,7 @@ It provides one-shot commands, an explicit interactive shell, lossless typed
 input and output, bounded pagination, and a separately linked FoundationDB
 diagnostic companion.
 
-Current development version: `26.0809.0`
+Current development version: `26.0809.1`
 
 ```mermaid
 flowchart LR
@@ -32,8 +32,9 @@ lifecycle and read-only inspection are isolated in the adjacent
 - the version-matched `database-server` executable for `open` and `serve`;
 - an HTTP, HTTPS, WebSocket, or secure WebSocket DatabaseWire endpoint for
   remote commands;
-- FoundationDB 7.3 client headers, library, `fdbserver`, and `fdbcli` only when
-  building or using `database-fdb`.
+- FoundationDB 7.3 client headers and library when building the native server
+  or `database-fdb`; `fdbserver` and `fdbcli` only for local cluster lifecycle
+  and diagnostics.
 
 ## Build and install
 
@@ -89,6 +90,30 @@ database open --memory
 database open ./local.sqlite --schema @schema.json
 ```
 
+Select another native storage backend explicitly:
+
+```bash
+database open --storage postgresql \
+  --postgres-host 127.0.0.1 \
+  --postgres-user database \
+  --postgres-password-file ~/.config/database/postgres.password \
+  --postgres-database database
+
+database open --storage foundationdb \
+  --fdb-cluster-file /etc/foundationdb/fdb.cluster
+```
+
+| `--storage` | Selection contract |
+|---|---|
+| `sqlite` (default) | One positional file path or `--memory` |
+| `postgresql` | Exactly one TCP host or Unix socket, plus role and database |
+| `foundationdb` | An explicit cluster file; no default-cluster fallback |
+
+The PostgreSQL password value is never accepted through argv. The optional
+password file is opened by the server as an owner-owned mode-`0600` regular
+file. `--database` remains the DatabaseWire routing identity; it does not
+select a storage backend.
+
 `open` starts the adjacent server over a private framed stream and enters the
 shell. The child runtime and storage engine are shut down authoritatively when
 the shell exits.
@@ -97,6 +122,9 @@ Start a persistent network server and create its local profile:
 
 ```bash
 database serve ./production.sqlite --profile production
+database serve --storage foundationdb \
+  --fdb-cluster-file /etc/foundationdb/fdb.cluster \
+  --profile production-fdb
 ```
 
 The first launch creates a mode-`0600` server configuration and token registry,
@@ -351,6 +379,9 @@ binary.
 ```bash
 database fdb cluster init --path /srv/database --port 4690
 database fdb cluster start --path /srv/database
+# Explicitly relax the reserve only for an isolated disposable cluster.
+database fdb cluster start --path /tmp/database-test \
+  --minimum-available-space-ratio 0.0
 database fdb cluster status --path /srv/database
 database fdb catalog list \
   --cluster-file /srv/database/.database/fdb.cluster
@@ -429,6 +460,7 @@ export DATABASE_FDB_EXECUTABLE=/path/to/database-fdb
 export DATABASE_SERVER_EXECUTABLE=/path/to/database-server
 scripts/process-test-harness
 scripts/fdb-test-harness
+../database-server/scripts/storage-test-harness
 ```
 
 The process harness verifies stdout/stderr separation, exit codes, explicit

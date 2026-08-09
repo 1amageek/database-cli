@@ -7,16 +7,16 @@ struct DatabaseServerExecutableTests {
     @Test("Version validation accepts only the exact adjacent version")
     func exactVersionIsRequired() async throws {
         try await withExecutable(
-            "#!/bin/sh\nprintf '26.0809.0\\n'\n"
+            "#!/bin/sh\nprintf '26.0809.1\\n'\n"
         ) { url in
             let executable = DatabaseServerExecutable(url: url)
             try await executable.validateVersion(
-                expected: "26.0809.0",
+                expected: "26.0809.1",
                 timeout: .seconds(1)
             )
             await #expect(throws: DatabaseCLIError.self) {
                 try await executable.validateVersion(
-                    expected: "26.0809.1",
+                    expected: "26.0809.2",
                     timeout: .seconds(1)
                 )
             }
@@ -33,7 +33,7 @@ struct DatabaseServerExecutableTests {
             let started = clock.now
             await #expect(throws: DatabaseCLIError.self) {
                 try await executable.validateVersion(
-                    expected: "26.0809.0",
+                    expected: "26.0809.1",
                     timeout: .milliseconds(100)
                 )
             }
@@ -52,7 +52,9 @@ struct DatabaseServerExecutableTests {
         ).prepare(
             request: .init(
                 configurationURL: URL(fileURLWithPath: "/tmp/server.json"),
-                databasePath: "/tmp/database.sqlite",
+                storageArguments: [
+                    "--storage", "sqlite", "--path", "/tmp/database.sqlite",
+                ],
                 host: nil,
                 port: nil,
                 databaseID: "main",
@@ -80,7 +82,9 @@ struct DatabaseServerExecutableTests {
             ).prepare(
                 request: .init(
                     configurationURL: URL(fileURLWithPath: "/tmp/server.json"),
-                    databasePath: "/tmp/database.sqlite",
+                    storageArguments: [
+                        "--storage", "sqlite", "--path", "/tmp/database.sqlite",
+                    ],
                     host: nil,
                     port: nil,
                     databaseID: "main",
