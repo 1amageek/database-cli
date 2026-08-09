@@ -14,7 +14,14 @@ DatabaseCLIExecutable
     ├── DatabaseClient
     ├── DatabaseClientHTTP
     ├── DatabaseClientWebSocket
+    ├── DatabaseClientFramedStream
     └── DatabaseWire
+
+DatabaseServerExecutable
+└── DatabaseServerHost
+    ├── DatabaseServerApplication
+    ├── DatabaseServerRuntime
+    └── SQLiteStorage
 
 DatabaseFDBExecutable
 ├── DatabaseCommandLine
@@ -24,10 +31,10 @@ DatabaseFDBExecutable
     └── DatabaseEngine catalog readers
 ```
 
-The executable split is a link-time boundary. `database` must not link
-`libfdb_c`; only `database-fdb` may do so. `database fdb` locates the companion
-in the same installation directory, sets the expected version, forwards the
-original arguments and standard streams, and preserves the companion exit code.
+The executable split is a link-time boundary. `database` links neither a
+storage backend nor `libfdb_c`. `database-server` owns native hosting and
+SQLite; `database-fdb` alone links FoundationDB. Both companions must be in the
+same installation directory and exactly match the CLI version.
 
 ## Remote execution flow
 
@@ -37,7 +44,7 @@ argv or shell line
         -> ResolvedConnection
             -> HTTP or WebSocket transport selected by URL scheme
                 -> DatabaseClient request identifier and wire frame
-                    -> one of 13 canonical DatabaseWire operations
+                    -> one of 14 canonical DatabaseWire operations
                         -> incremental result renderer
 ```
 
@@ -45,6 +52,29 @@ There is no direct `StorageEngine` connection in the main executable, no
 automatic retry, and no protocol fallback. `trace-id`, `idempotency-key`, the
 five execution budget fields, paging, graph partitions, and preconditions retain
 their canonical wire meaning.
+
+## Standalone execution flow
+
+```text
+database open <path>|--memory
+    -> adjacent version check
+        -> database-server stdio
+            -> private framed-stream transport
+                -> empty or persisted schema generation
+                    -> shared shell parser and executor
+
+database serve <path> --profile <name>
+    -> private bootstrap pipe
+        -> profile and Keychain commit
+            -> credential acknowledgement
+                -> database-server serve
+                    -> HTTP and WebSocket DatabaseWire endpoint
+```
+
+The CLI owns profile, Keychain, shell, and child-process UX. The server owns
+listener, TLS, authentication, routing, signals, runtime composition, and
+authoritative storage shutdown. Database semantics do not move into either
+process adapter.
 
 ## Streaming and ownership
 

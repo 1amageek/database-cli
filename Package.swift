@@ -15,11 +15,11 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-kit.git",
-            from: "26.0808.0"
+            from: "26.0809.4"
         ),
         .package(
             url: "https://github.com/1amageek/database-client.git",
-            from: "26.0808.0"
+            from: "26.0809.0"
         ),
         .package(
             url: "https://github.com/1amageek/storage-kit.git",
@@ -31,10 +31,21 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-framework.git",
-            from: "26.0808.0"
+            from: "26.0809.1"
+        ),
+        .package(
+            url: "https://github.com/apple/swift-nio.git",
+            exact: "2.101.3"
         ),
     ],
     targets: [
+        .target(
+            name: "CDatabaseCLIReadline",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedLibrary("edit"),
+            ]
+        ),
         .target(
             name: "CDatabaseCLISignals",
             publicHeadersPath: "include"
@@ -42,13 +53,18 @@ let package = Package(
         .target(
             name: "DatabaseCommandLine",
             dependencies: [
+                "CDatabaseCLIReadline",
                 "CDatabaseCLISignals",
                 .product(name: "DatabaseTypes", package: "database-types"),
                 .product(name: "DatabaseKit", package: "database-kit"),
+                .product(name: "DatabaseSchemaJSON", package: "database-kit"),
                 .product(name: "DatabaseWire", package: "database-kit"),
                 .product(name: "DatabaseClient", package: "database-client"),
                 .product(name: "DatabaseClientHTTP", package: "database-client"),
                 .product(name: "DatabaseClientWebSocket", package: "database-client"),
+                .product(name: "DatabaseClientFramedStream", package: "database-client"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
             ]
         ),
         .executableTarget(

@@ -6,8 +6,21 @@ RESULT_DIRECTORY="${DATABASE_CLI_PROCESS_RESULT_DIRECTORY:-${TMPDIR:-/tmp}/datab
 WORK_ROOT=""
 DATABASE="${DATABASE_CLI_EXECUTABLE:-}"
 HELPER="${DATABASE_FDB_EXECUTABLE:-}"
+SERVER="${DATABASE_SERVER_EXECUTABLE:-}"
+SERVE_PID=""
+PROCESS_PROFILE=""
 
 cleanup() {
+  if [[ -n "$SERVE_PID" ]] && kill -0 "$SERVE_PID" 2>/dev/null; then
+    kill -TERM "$SERVE_PID" 2>/dev/null || true
+    wait "$SERVE_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$PROCESS_PROFILE" && -n "$DATABASE" && -x "$DATABASE" ]]; then
+    "$DATABASE" auth logout --profile "$PROCESS_PROFILE" \
+      >/dev/null 2>&1 || true
+    "$DATABASE" profile remove "$PROCESS_PROFILE" \
+      >/dev/null 2>&1 || true
+  fi
   if [[ -z "$WORK_ROOT" || ! -d "$WORK_ROOT" ]]; then
     return
   fi
@@ -20,6 +33,13 @@ cleanup() {
 }
 
 trap cleanup EXIT
+
+for command in otool pgrep rg ruby stat; do
+  if ! command -v "$command" >/dev/null 2>&1; then
+    echo "error: required command not found: $command" >&2
+    exit 2
+  fi
+done
 
 for candidate in \
     "$ROOT_DIR/.build/arm64-apple-macosx/debug/database" \
@@ -37,11 +57,28 @@ if [[ ! -x "$HELPER" ]]; then
   echo "error: database-fdb executable was not found" >&2
   exit 2
 fi
+if [[ -z "$SERVER" ]]; then
+  SERVER="$(dirname "$DATABASE")/database-server"
+fi
+if [[ ! -x "$SERVER" ]]; then
+  echo "error: database-server executable was not found" >&2
+  exit 2
+fi
 
 WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/database-cli-process-test.XXXXXX")"
+export DATABASE_CLI_CONFIG_HOME="$WORK_ROOT/config"
 mkdir -p "$RESULT_DIRECTORY"
 run_identifier="$(date -u +%Y%m%d-%H%M%S)-$$"
 log_path="$RESULT_DIRECTORY/Process-$run_identifier.log"
+
+install_directory="$WORK_ROOT/install"
+mkdir -p "$install_directory"
+cp "$DATABASE" "$install_directory/database"
+cp "$HELPER" "$install_directory/database-fdb"
+cp "$SERVER" "$install_directory/database-server"
+DATABASE="$install_directory/database"
+HELPER="$install_directory/database-fdb"
+SERVER="$install_directory/database-server"
 
 run_and_capture() {
   local name="$1"
@@ -55,7 +92,8 @@ run_and_capture() {
   printf '%s' "$status"
 }
 
-{
+exec > >(tee "$log_path") 2>&1
+
   status="$(run_and_capture no-arguments "$DATABASE")"
   [[ "$status" == "0" ]]
   rg -q '^database — authenticated DatabaseWire command line$' "$WORK_ROOT/no-arguments.stdout"
@@ -68,11 +106,11 @@ run_and_capture() {
 
   status="$(run_and_capture version "$DATABASE" --version)"
   [[ "$status" == "0" ]]
-  [[ "$(tr -d '\n' <"$WORK_ROOT/version.stdout")" == "26.0808.1" ]]
+  [[ "$(tr -d '\n' <"$WORK_ROOT/version.stdout")" == "26.0809.0" ]]
 
   status="$(run_and_capture delegated-version "$DATABASE" fdb --version)"
   [[ "$status" == "0" ]]
-  [[ "$(tr -d '\n' <"$WORK_ROOT/delegated-version.stdout")" == "26.0808.1" ]]
+  [[ "$(tr -d '\n' <"$WORK_ROOT/delegated-version.stdout")" == "26.0809.0" ]]
   [[ ! -s "$WORK_ROOT/delegated-version.stderr" ]]
 
   status="$(run_and_capture helper-invalid "$DATABASE" fdb invalid command)"
@@ -111,6 +149,138 @@ run_and_capture() {
   [[ "$(tr -d '\n' <"$history_path")" == "--version" ]]
   rg -q '^Database shell ' "$WORK_ROOT/shell.stderr"
 
+  set +e
+  printf '%s\n' '\mode command' 'capabilities --output json' '\quit' \
+    | "$DATABASE" open --memory \
+      >"$WORK_ROOT/open-memory.stdout" \
+      2>"$WORK_ROOT/open-memory.stderr"
+  status=$?
+  set -e
+  [[ "$status" == "0" ]]
+  rg -q '"identifier":"schema.execute","version":"1"' \
+    "$WORK_ROOT/open-memory.stdout"
+  rg -q '^Database shell ' "$WORK_ROOT/open-memory.stderr"
+  if pgrep -f "$SERVER" >/dev/null; then
+    echo "error: database-server survived database open shutdown" >&2
+    exit 1
+  fi
+
+  set +e
+  ruby "$ROOT_DIR/scripts/pty-shell-test" \
+    "$DATABASE" "$WORK_ROOT/open-memory-pty.stdout" \
+    2>"$WORK_ROOT/open-memory-pty.stderr"
+  status=$?
+  set -e
+  [[ "$status" == "0" ]]
+  rg -q '"identifier":"schema.execute","version":"1"' \
+    "$WORK_ROOT/open-memory-pty.stdout"
+  if pgrep -f "$SERVER" >/dev/null; then
+    echo "error: database-server survived interactive completion shutdown" >&2
+    exit 1
+  fi
+
+  database_path="$WORK_ROOT/standalone.sqlite"
+  set +e
+  printf '%s\n' '\quit' | "$DATABASE" open "$database_path" \
+    >"$WORK_ROOT/open-file.stdout" \
+    2>"$WORK_ROOT/open-file.stderr"
+  status=$?
+  set -e
+  [[ "$status" == "0" ]]
+  [[ -f "$database_path" ]]
+
+  serve_port="$(ruby -rsocket -e \
+    'socket = TCPServer.new("127.0.0.1", 0); puts socket.addr[1]; socket.close')"
+  serve_directory="$WORK_ROOT/serve"
+  mkdir -m 700 "$serve_directory"
+  serve_database="$serve_directory/database.sqlite"
+  PROCESS_PROFILE="process-$run_identifier"
+  serve_configuration="$DATABASE_CLI_CONFIG_HOME/servers/$PROCESS_PROFILE/server.json"
+  "$DATABASE" serve "$serve_database" \
+    --profile "$PROCESS_PROFILE" \
+    --listen "127.0.0.1:$serve_port" \
+    >"$WORK_ROOT/serve.stdout" 2>"$WORK_ROOT/serve.stderr" &
+  SERVE_PID=$!
+
+  serve_ready=0
+  for _ in {1..200}; do
+    set +e
+    "$DATABASE" capabilities --profile "$PROCESS_PROFILE" --output json \
+      >"$WORK_ROOT/serve-capabilities.stdout" \
+      2>"$WORK_ROOT/serve-capabilities.stderr"
+    status=$?
+    set -e
+    if [[ "$status" == "0" ]]; then
+      serve_ready=1
+      break
+    fi
+    if ! kill -0 "$SERVE_PID" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  [[ "$serve_ready" == "1" ]]
+  rg -q '"identifier":"schema.execute","version":"1"' \
+    "$WORK_ROOT/serve-capabilities.stdout"
+  [[ "$(stat -f '%Lp' "$serve_configuration")" == "600" ]]
+  [[ "$(stat -f '%Lp' "$(dirname "$serve_configuration")/tokens.json")" == "600" ]]
+
+  kill -INT "$SERVE_PID"
+  set +e
+  wait "$SERVE_PID"
+  status=$?
+  set -e
+  SERVE_PID=""
+  [[ "$status" == "130" ]]
+  if pgrep -f "$SERVER.*serve" >/dev/null; then
+    echo "error: database-server survived database serve cancellation" >&2
+    exit 1
+  fi
+
+  status="$(run_and_capture serve-negative-readiness \
+    "$DATABASE" capabilities --profile "$PROCESS_PROFILE")"
+  [[ "$status" == "8" ]]
+  [[ -f "$serve_database" ]]
+
+  status="$(run_and_capture serve-auth-logout \
+    "$DATABASE" auth logout --profile "$PROCESS_PROFILE")"
+  [[ "$status" == "0" ]]
+  status="$(run_and_capture serve-profile-remove \
+    "$DATABASE" profile remove "$PROCESS_PROFILE")"
+  [[ "$status" == "0" ]]
+  PROCESS_PROFILE=""
+
+  missing_server_bin="$WORK_ROOT/missing-server-bin"
+  mkdir -p "$missing_server_bin"
+  cp "$DATABASE" "$missing_server_bin/database"
+  status="$(run_and_capture missing-server \
+    "$missing_server_bin/database" open --memory)"
+  [[ "$status" == "8" ]]
+  rg -q 'database-server executable is not installed' \
+    "$WORK_ROOT/missing-server.stderr"
+
+  mismatch_server_bin="$WORK_ROOT/mismatch-server-bin"
+  mkdir -p "$mismatch_server_bin"
+  cp "$DATABASE" "$mismatch_server_bin/database"
+  cp "$ROOT_DIR/Tests/Fixtures/VersionMismatchDatabaseServer.sh" \
+    "$mismatch_server_bin/database-server"
+  chmod 700 "$mismatch_server_bin/database-server"
+  status="$(run_and_capture mismatched-server \
+    "$mismatch_server_bin/database" open --memory)"
+  [[ "$status" == "8" ]]
+  rg -q 'versions do not match' "$WORK_ROOT/mismatched-server.stderr"
+
+  crashing_server_bin="$WORK_ROOT/crashing-server-bin"
+  mkdir -p "$crashing_server_bin"
+  cp "$DATABASE" "$crashing_server_bin/database"
+  cp "$ROOT_DIR/Tests/Fixtures/CrashingDatabaseServer.sh" \
+    "$crashing_server_bin/database-server"
+  chmod 700 "$crashing_server_bin/database-server"
+  status="$(run_and_capture crashing-server \
+    "$crashing_server_bin/database" open --memory)"
+  [[ "$status" == "8" ]]
+  [[ "$(rg -c '^error:' "$WORK_ROOT/crashing-server.stderr")" == "1" ]]
+
   if otool -L "$DATABASE" | rg -q 'libfdb_c'; then
     echo "error: database unexpectedly links FoundationDB" >&2
     exit 1
@@ -119,8 +289,9 @@ run_and_capture() {
 
   echo "database=$DATABASE"
   echo "database-fdb=$HELPER"
+  echo "database-server=$SERVER"
+  echo "standalone-serve=passed"
   echo "process-contract=passed"
-} 2>&1 | tee "$log_path"
 
 echo "Database CLI process integration passed"
 echo "Log: $log_path"

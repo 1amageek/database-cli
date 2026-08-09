@@ -114,8 +114,28 @@ public struct CredentialResolver: Sendable {
         )
     }
 
+    public func resolvedTokenIfAvailable(
+        for profile: DatabaseProfile
+    ) throws -> String? {
+        if let token = try store.read(profile: profile.name), !token.isEmpty {
+            return token
+        }
+        if let name = profile.tokenEnvironment,
+           let token = environment[name], !token.isEmpty {
+            return token
+        }
+        if let token = environment["DATABASE_ACCESS_TOKEN"], !token.isEmpty {
+            return token
+        }
+        return nil
+    }
+
     public func storeToken(_ token: String, profile: String) throws {
         try store.write(token, profile: profile)
+    }
+
+    func storedToken(profile: String) throws -> String? {
+        try store.read(profile: profile)
     }
 
     public func removeToken(profile: String) throws {

@@ -70,9 +70,7 @@ public struct ProfileStore: Sendable {
         if let fileURL {
             self.fileURL = fileURL
         } else {
-            self.fileURL = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".config", isDirectory: true)
-                .appendingPathComponent("database", isDirectory: true)
+            self.fileURL = DatabaseCLIPaths.configurationDirectory()
                 .appendingPathComponent("profiles.json", isDirectory: false)
         }
     }
@@ -82,7 +80,7 @@ public struct ProfileStore: Sendable {
             return ProfileDocument()
         }
         do {
-            let data = try Data(contentsOf: fileURL)
+            let data = try SecureLocalFile.read(from: fileURL)
             let document = try JSONDecoder().decode(ProfileDocument.self, from: data)
             let names = document.profiles.map(\.name)
             guard Set(names).count == names.count else {
@@ -107,19 +105,9 @@ public struct ProfileStore: Sendable {
     }
 
     public func save(_ document: ProfileDocument) throws {
-        let directory = fileURL.deletingLastPathComponent()
         do {
-            try FileManager.default.createDirectory(
-                at: directory,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
             let data = try JSONEncoder().encode(document)
-            try data.write(to: fileURL, options: .atomic)
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o600],
-                ofItemAtPath: fileURL.path
-            )
+            try SecureLocalFile.replace(data, at: fileURL)
         } catch {
             throw DatabaseCLIError(
                 .input,
@@ -131,13 +119,23 @@ public struct ProfileStore: Sendable {
     public func selectedProfile(
         named requestedName: String?
     ) throws -> DatabaseProfile {
-        let document = try load()
-        let name = requestedName ?? document.activeProfile
-        guard let name else {
+        guard let profile = try selectedProfileIfConfigured(
+            named: requestedName
+        ) else {
             throw DatabaseCLIError(
                 .input,
                 "No profile selected; use '--profile' or 'database profile use'"
             )
+        }
+        return profile
+    }
+
+    public func selectedProfileIfConfigured(
+        named requestedName: String?
+    ) throws -> DatabaseProfile? {
+        let document = try load()
+        guard let name = requestedName ?? document.activeProfile else {
+            return nil
         }
         guard let profile = document.profiles.first(where: { $0.name == name }) else {
             throw DatabaseCLIError(.input, "Profile '\(name)' does not exist")

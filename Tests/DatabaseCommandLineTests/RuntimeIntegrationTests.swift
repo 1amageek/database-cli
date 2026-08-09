@@ -229,7 +229,12 @@ private final class RuntimeTransport: DatabaseTransport, Sendable {
         _ request: ByteString
     ) async throws(DatabaseTransportError) -> ByteString {
         do {
-            return try await runtime.execute(request)
+            return try await runtime.execute(
+                request,
+                context: DatabaseRequestExecutionContext(
+                    authorization: .anonymous
+                )
+            )
         } catch is CancellationError {
             throw .cancelled
         } catch {

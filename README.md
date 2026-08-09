@@ -5,12 +5,13 @@ It provides one-shot commands, an explicit interactive shell, lossless typed
 input and output, bounded pagination, and a separately linked FoundationDB
 diagnostic companion.
 
-Current release: `26.0808.1`
+Current development version: `26.0809.0`
 
 ```mermaid
 flowchart LR
     CLI["database<br/>commands and shell"] --> Client["DatabaseClient"]
-    Client --> Wire["DatabaseWire v1<br/>13 operation families"]
+    Client --> Host["database-server<br/>HTTP / WebSocket / stdio"]
+    Host --> Wire["DatabaseWire v1<br/>14 operation families"]
     Wire --> Runtime["DatabaseServerRuntime"]
     Runtime --> Container["DBContainer<br/>indexes, graph, ontology"]
 
@@ -28,6 +29,7 @@ lifecycle and read-only inspection are isolated in the adjacent
 - macOS 26 or later;
 - the pinned Swift 6.4 development snapshot
   `org.swift.64202607231a` for source builds;
+- the version-matched `database-server` executable for `open` and `serve`;
 - an HTTP, HTTPS, WebSocket, or secure WebSocket DatabaseWire endpoint for
   remote commands;
 - FoundationDB 7.3 client headers, library, `fdbserver`, and `fdbcli` only when
@@ -55,15 +57,23 @@ swift build \
   --only-use-versions-from-resolved-file
 ```
 
-Install `database` and `database-fdb` in the same directory. Delegation through
-`database fdb ...` rejects a missing helper or a helper with a different CLI
-version. Use `swift build --show-bin-path` to locate the built products.
+Build the native server from the adjacent `database-server` package:
+
+```bash
+export TOOLCHAINS=org.swift.64202607231a
+swift build --product database-server
+```
+
+Install `database`, `database-server`, and `database-fdb` in the same directory.
+Both companion boundaries reject a missing executable or a different version.
+Use `swift build --show-bin-path` to locate each built product.
 
 Verify the installation before configuring a server:
 
 ```bash
 database --version
 database
+database-server --version
 database fdb --version
 ```
 
@@ -72,12 +82,34 @@ mode implicitly.
 
 ## Quick start
 
-Create and select a routing profile, then store its access token in the macOS
-Keychain:
+Open an ephemeral or file-backed standalone database:
+
+```bash
+database open --memory
+database open ./local.sqlite --schema @schema.json
+```
+
+`open` starts the adjacent server over a private framed stream and enters the
+shell. The child runtime and storage engine are shut down authoritatively when
+the shell exits.
+
+Start a persistent network server and create its local profile:
+
+```bash
+database serve ./production.sqlite --profile production
+```
+
+The first launch creates a mode-`0600` server configuration and token registry,
+stores the initial administrator token in the macOS Keychain through a private
+acknowledged pipe, and serves `http://127.0.0.1:7878/v1/database`. Later starts
+reuse the same profile and credential.
+
+For an existing remote server, create and select a routing profile, then store
+its access token in the macOS Keychain:
 
 ```bash
 database profile create production \
-  --endpoint https://database.example.com/v1 \
+  --endpoint https://database.example.com/v1/database \
   --database main \
   --tenant acme \
   --workspace research
@@ -109,7 +141,9 @@ database
 ├── profile create|list|show|use|remove
 ├── auth login|logout
 ├── capabilities
-├── schema list|show
+├── open
+├── serve
+├── schema list|show|plan|apply
 ├── query sql|sparql
 ├── mutate sql|sparql
 ├── entity insert|update|upsert|delete|apply
@@ -128,6 +162,9 @@ database
 ├── index status|rebuild
 ├── maintenance compact
 ├── job status|wait|result|cancel
+├── inspect overview|entities|indexes|graph|ontology|shapes|jobs
+├── doctor
+├── completion bash|zsh|fish
 ├── shell
 └── fdb
     ├── cluster init|start|stop|status
@@ -139,6 +176,17 @@ Remote families map directly to canonical DatabaseWire operations. Commands
 that support resumable execution accept `--as-job <kind>` only when the server
 advertises that exact operation family and job kind. `job wait` performs
 deadline-bounded status polling; it is not a separate wire operation.
+
+`schema plan` and `schema apply` use the fourteenth operation,
+`schemaExecute`. Apply requires the expected current fingerprint and an
+idempotency key. A successful apply publishes one immutable runtime generation;
+in-flight requests retain their old generation lease.
+
+`doctor` is strictly read-only. It reports installation/configuration,
+credential availability, DNS resolution, TCP connectivity, TLS validation,
+authenticated protocol negotiation, and schema readability as separate
+`pass`, `warn`, `fail`, or `skipped` checks with remediation text. It never
+renders or transmits a credential during the DNS/TCP/TLS-only probes.
 
 See [Command contract](Documentation/Commands.md) for positional arguments,
 family mapping, and operation-specific options.
@@ -170,6 +218,12 @@ Credential resolution order is:
 
 Profile files contain routing configuration only. Configuration directories use
 mode `0700`; profile and persistent-history files use mode `0600`.
+
+`database serve` never accepts a bearer-token argument. Its private bootstrap
+pipe sends a raw initial token only once; the CLI acknowledges it only after the
+Keychain and profile update succeed. Rejection removes the new server
+credential. Non-loopback listeners are rejected unless the server configuration
+has TLS and a complete database/tenant/workspace routing identity.
 
 ## Request metadata and execution budgets
 
@@ -347,7 +401,9 @@ Completions/database.fish
 ```
 
 Install or source the file using the normal completion directory for the
-selected shell.
+selected shell. A golden test requires every checked-in file to exactly match
+the immutable `CommandCatalog` generator, so commands cannot drift from parser
+or help definitions.
 
 ## Verification
 
@@ -360,9 +416,9 @@ scripts/xcode-test-harness
 
 The harness resolves URL dependencies without using Xcode's shared repository
 cache, builds once, injects the matching Swift Testing runtime, and runs the
-generated `.xctestrun` without rebuilding. The reviewed contract is 25 tests,
-130 dynamic parameter runs, zero failures, zero skips, zero expected failures,
-zero runtime warnings, and no internal tool errors.
+generated `.xctestrun` without rebuilding. The reviewed contract is 48 logical
+tests, zero failures, zero skips, zero expected failures, zero runtime warnings,
+and no internal tool errors.
 
 Process and real FoundationDB integration use the exact binaries from the
 URL-resolved build:
@@ -370,13 +426,18 @@ URL-resolved build:
 ```bash
 export DATABASE_CLI_EXECUTABLE=/path/to/database
 export DATABASE_FDB_EXECUTABLE=/path/to/database-fdb
+export DATABASE_SERVER_EXECUTABLE=/path/to/database-server
 scripts/process-test-harness
 scripts/fdb-test-harness
 ```
 
 The process harness verifies stdout/stderr separation, exit codes, explicit
-shell launch, history permissions, secret redaction, helper version matching,
-and FoundationDB link separation. The FoundationDB harness provisions an
+shell launch, controlling-terminal Tab completion, history permissions, secret
+redaction, companion version matching, standalone memory/file operation, child
+shutdown, and FoundationDB link separation. It also starts `database serve`,
+reaches it through the saved profile and Keychain credential, sends SIGINT, and
+requires negative readiness.
+The FoundationDB harness provisions an
 isolated FoundationDB 7.3 cluster, verifies protocol readiness, exercises
 selected-cluster reads, stops the service, and requires negative readiness.
 

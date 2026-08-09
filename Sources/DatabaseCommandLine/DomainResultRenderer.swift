@@ -6,7 +6,13 @@ extension ResultRenderer {
     func renderCapabilities(
         _ response: CapabilitiesDescribeOperation.Response
     ) throws {
-        _ = try renderJSON(.object([
+        _ = try renderJSON(capabilitiesNode(response))
+    }
+
+    func capabilitiesNode(
+        _ response: CapabilitiesDescribeOperation.Response
+    ) -> StrictJSONValue {
+        .object([
             ("runtimeVersion", .string(response.runtimeVersion)),
             ("features", .array(response.features.map {
                 .object([
@@ -20,13 +26,68 @@ extension ResultRenderer {
                     ("kind", .string($0.kind)),
                 ])
             })),
-        ]))
+        ])
     }
 
     func renderSchema(
         _ response: SchemaDescribeOperation.Response,
         entity requestedEntity: String?
     ) throws {
+        _ = try renderJSON(try schemaNode(response, entity: requestedEntity))
+    }
+
+    func renderSchemaExecution(
+        _ response: SchemaExecuteOperation.Response
+    ) throws {
+        let node: StrictJSONValue
+        switch response {
+        case .plan(let plan):
+            node = .object([
+                ("type", .string("schemaPlan")),
+                ("currentFingerprint", plan.currentFingerprint.map {
+                    .string(Base64URL.encode($0.bytes))
+                } ?? .null),
+                ("targetFingerprint", .string(
+                    Base64URL.encode(plan.targetFingerprint.bytes)
+                )),
+                ("compatibility", .string(schemaCompatibility(plan.compatibility))),
+                ("issues", .array(plan.issues.map { issue in
+                    .object([
+                        ("code", .string(issue.code)),
+                        ("path", .string(issue.path)),
+                        ("message", .string(issue.message)),
+                    ])
+                })),
+            ])
+        case .applied(let applied):
+            node = .object([
+                ("type", .string("schemaApplied")),
+                ("previousFingerprint", applied.previousFingerprint.map {
+                    .string(Base64URL.encode($0.bytes))
+                } ?? .null),
+                ("fingerprint", .string(Base64URL.encode(applied.fingerprint.bytes))),
+                ("schemaVersion", .string(applied.schemaVersion.description)),
+                ("generation", .string(String(applied.generation))),
+                ("job", applied.job.map { jobNode($0, event: nil) } ?? .null),
+            ])
+        }
+        _ = try renderJSON(node)
+    }
+
+    func schemaCompatibility(
+        _ value: SchemaExecuteOperation.Compatibility
+    ) -> String {
+        switch value {
+        case .initial: "initial"
+        case .compatible: "compatible"
+        case .requiresMigration: "requiresMigration"
+        }
+    }
+
+    func schemaNode(
+        _ response: SchemaDescribeOperation.Response,
+        entity requestedEntity: String?
+    ) throws -> StrictJSONValue {
         let entities: [SchemaDescribeOperation.Entity]
         if let requestedEntity {
             guard let entity = response.entities.first(where: {
@@ -41,10 +102,102 @@ extension ResultRenderer {
         } else {
             entities = response.entities
         }
-        _ = try renderJSON(.object([
+        return .object([
             ("version", .string(response.version.description)),
             ("entities", .array(try entities.map(schemaEntityNode))),
+        ])
+    }
+
+    func renderInspectionOverview(
+        capabilities: CapabilitiesDescribeOperation.Response,
+        schema: SchemaDescribeOperation.Response
+    ) throws {
+        _ = try renderJSON(.object([
+            ("capabilities", capabilitiesNode(capabilities)),
+            ("schema", try schemaNode(schema, entity: nil)),
         ]))
+    }
+
+    func renderAdvertisedJobs(
+        _ response: CapabilitiesDescribeOperation.Response
+    ) throws {
+        _ = try renderJSON(.object([
+            ("source", .string("advertised-capabilities")),
+            ("operations", .array(response.jobOperations.map {
+                .object([
+                    ("family", .string(operationName($0.family))),
+                    ("kind", .string($0.kind)),
+                ])
+            })),
+        ]))
+    }
+
+    func renderIndexInspection(
+        schema: SchemaDescribeOperation.Response,
+        status: MaintenanceExecuteOperation.Response,
+        entity requestedEntity: String?
+    ) throws {
+        let filtered = try filteredEntities(schema, entity: requestedEntity)
+        guard case .indexStatus(let page) = status else {
+            throw DatabaseCLIError(
+                .internalFailure,
+                "Index inspection received a non-index maintenance response"
+            )
+        }
+        var runtimeStates: [StrictJSONValue] = []
+        var iterator = page.makeIndexIterator()
+        while let index = try iterator.next() {
+            runtimeStates.append(.object([
+                ("entity", .string(index.entity)),
+                ("index", .string(index.index)),
+                ("partitions", try encodedField(.object(index.partitions))),
+                ("state", .string(indexState(index.state))),
+                ("indexedEntityCount", .string(String(index.indexedEntityCount))),
+                ("detail", index.detail.map(StrictJSONValue.string) ?? .null),
+            ]))
+        }
+        _ = try renderJSON(.object([
+            ("source", .string("schema-and-maintenance")),
+            ("entities", .array(try filtered.map(schemaEntityNode))),
+            ("runtimeStates", .array(runtimeStates)),
+            ("continuation", page.continuation.map {
+                .string(Base64URL.encode($0))
+            } ?? .null),
+        ]))
+    }
+
+    func renderGraphInspection(
+        _ response: SchemaDescribeOperation.Response,
+        entity requestedEntity: String?
+    ) throws {
+        let filtered = try filteredEntities(response, entity: requestedEntity)
+        let graphEntities = filtered.filter { entity in
+            entity.fields.contains { $0.reference != nil }
+                || entity.indexes.contains { index in
+                    let kind = index.kind.lowercased()
+                    return kind.contains("graph") || kind.contains("rdf")
+                }
+        }
+        _ = try renderJSON(.object([
+            ("source", .string("schema-declarations")),
+            ("entities", .array(try graphEntities.map(schemaEntityNode))),
+        ]))
+    }
+
+    private func filteredEntities(
+        _ response: SchemaDescribeOperation.Response,
+        entity requestedEntity: String?
+    ) throws -> [SchemaDescribeOperation.Entity] {
+        guard let requestedEntity else { return response.entities }
+        guard let entity = response.entities.first(where: {
+            $0.name == requestedEntity
+        }) else {
+            throw DatabaseCLIError(
+                .notFound,
+                "Schema entity '\(requestedEntity)' was not found"
+            )
+        }
+        return [entity]
     }
 
     func renderMutation(
@@ -589,6 +742,7 @@ private extension ResultRenderer {
         switch value {
         case .capabilitiesDescribe: "capabilitiesDescribe"
         case .schemaDescribe: "schemaDescribe"
+        case .schemaExecute: "schemaExecute"
         case .queryExecute: "queryExecute"
         case .mutationExecute: "mutationExecute"
         case .graphAlgorithm: "graphAlgorithm"

@@ -367,6 +367,13 @@ struct StrictJSONObject {
 }
 
 extension StrictJSONValue {
+    func number(named name: String) throws -> String {
+        guard case .number(let value) = self else {
+            throw DatabaseCLIError(.input, "JSON field '\(name)' must be a number")
+        }
+        return value
+    }
+
     func string(named name: String) throws -> String {
         guard case .string(let value) = self else {
             throw DatabaseCLIError(.input, "JSON field '\(name)' must be a string")

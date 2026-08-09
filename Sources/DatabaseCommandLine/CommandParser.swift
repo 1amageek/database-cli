@@ -38,13 +38,21 @@ public struct CommandOptions: Sendable, Hashable {
         storage[name, default: []].compactMap { $0 }
     }
 
+    public func occurrenceCount(_ name: String) -> Int {
+        storage[name]?.count ?? 0
+    }
+
     mutating func append(_ value: String?, for name: String) {
         storage[name, default: []].append(value)
     }
 }
 
 public struct CommandParser: Sendable {
-    public init() {}
+    public let catalog: CommandCatalog
+
+    public init(catalog: CommandCatalog = .standard) {
+        self.catalog = catalog
+    }
 
     public func parse(_ arguments: [String]) throws -> ParsedCommand {
         guard !arguments.isEmpty else {
@@ -65,7 +73,9 @@ public struct CommandParser: Sendable {
             return ParsedCommand(path: ["help"], positionals: path)
         }
 
-        let definition = try Self.definition(for: path)
+        guard let definition = catalog.command(for: path) else {
+            throw DatabaseCLIError(.input, "Unknown command")
+        }
         var positionals: [String] = []
         var options = CommandOptions()
         var index = 0
@@ -81,22 +91,26 @@ public struct CommandParser: Sendable {
             if !optionsEnded, token.hasPrefix("--") {
                 let parsed = try parseOptionToken(token)
                 let option = parsed.name
-                guard definition.valueOptions.contains(option)
-                    || definition.flagOptions.contains(option)
-                    || Self.commonValueOptions.contains(option)
-                    || Self.commonFlagOptions.contains(option) else {
+                guard let descriptor = catalog.option(
+                    named: option,
+                    for: definition
+                ) else {
                     throw DatabaseCLIError(
                         .input,
                         "Unknown option '--\(option)' for '\(path.joined(separator: " "))'"
                     )
                 }
-                let requiresValue = definition.valueOptions.contains(option)
-                    || Self.commonValueOptions.contains(option)
-                guard !options.contains(option) else {
+                if let maximum = descriptor.maximumOccurrences,
+                   options.occurrenceCount(option) >= maximum {
                     throw DatabaseCLIError(
                         .input,
                         "Option '--\(option)' may be specified only once"
                     )
+                }
+                let requiresValue: Bool
+                switch descriptor.valueMode {
+                case .flag: requiresValue = false
+                case .value: requiresValue = true
                 }
                 if requiresValue {
                     let value: String
@@ -140,7 +154,7 @@ public struct CommandParser: Sendable {
                 "Invalid arguments for '\(path.joined(separator: " "))'; expected \(definition.usage)"
             )
         }
-        try validateCommonOptions(options)
+        try validate(options, for: definition)
         return ParsedCommand(
             path: path,
             positionals: positionals,
@@ -156,7 +170,7 @@ public struct CommandParser: Sendable {
         }
         for count in stride(from: maximum, through: 1, by: -1) {
             let candidate = Array(nonOptionPrefix.prefix(count))
-            if Self.definitions[candidate] != nil {
+            if catalog.command(for: candidate) != nil {
                 return candidate
             }
         }
@@ -181,147 +195,37 @@ public struct CommandParser: Sendable {
         return (String(body), nil)
     }
 
-    private func validateCommonOptions(
-        _ options: CommandOptions
+    private func validate(
+        _ options: CommandOptions,
+        for command: CommandDescriptor
     ) throws {
-        if options.contains("all") {
-            for required in ["max-total-rows", "max-total-bytes", "max-pages"] {
-                guard options.value(required) != nil else {
-                    throw DatabaseCLIError(
-                        .input,
-                        "'--all' requires '--\(required)'"
-                    )
-                }
+        var errors: [String] = []
+        let descriptors = command.options + catalog.commonOptions
+        var visited = Set<String>()
+        for descriptor in descriptors where visited.insert(descriptor.name).inserted {
+            let count = options.occurrenceCount(descriptor.name)
+            if count < descriptor.minimumOccurrences {
+                errors.append("Missing required option '--\(descriptor.name)'")
+            }
+            guard count > 0 else { continue }
+            for conflict in descriptor.conflictsWith.sorted()
+            where options.contains(conflict) {
+                errors.append(
+                    "'--\(descriptor.name)' cannot be combined with '--\(conflict)'"
+                )
+            }
+            for requirement in descriptor.requires.sorted()
+            where !options.contains(requirement) {
+                errors.append(
+                    "'--\(descriptor.name)' requires '--\(requirement)'"
+                )
             }
         }
-        if options.value("continuation") != nil, options.contains("all") {
-            throw DatabaseCLIError(
-                .input,
-                "'--continuation' cannot be combined with '--all'"
-            )
+        let uniqueErrors = errors.reduce(into: [String]()) { result, error in
+            if !result.contains(error) { result.append(error) }
         }
-    }
-}
-
-private extension CommandParser {
-    struct Definition {
-        let positionalRange: ClosedRange<Int>
-        let valueOptions: Set<String>
-        let flagOptions: Set<String>
-        let usage: String
-
-        init(
-            _ positionalRange: ClosedRange<Int>,
-            values: Set<String> = [],
-            flags: Set<String> = [],
-            usage: String
-        ) {
-            self.positionalRange = positionalRange
-            self.valueOptions = values
-            self.flagOptions = flags
-            self.usage = usage
+        guard uniqueErrors.isEmpty else {
+            throw DatabaseCLIError(.input, uniqueErrors.joined(separator: "\n"))
         }
-    }
-
-    static let commonValueOptions: Set<String> = [
-        "profile", "endpoint", "database", "tenant", "workspace",
-        "trace-id", "idempotency-key", "output", "page-size",
-        "continuation", "parameters", "graph-partitions", "as-job",
-        "maximum-rows", "maximum-work-units", "maximum-intermediate-rows",
-        "maximum-intermediate-bytes", "timeout-milliseconds",
-        "max-total-rows", "max-total-bytes", "max-pages",
-    ]
-
-    static let commonFlagOptions: Set<String> = ["all"]
-
-    static let definitions: [[String]: Definition] = {
-        var values: [[String]: Definition] = [:]
-        func add(
-            _ path: [String],
-            _ range: ClosedRange<Int>,
-            valueOptions: Set<String> = [],
-            flagOptions: Set<String> = [],
-            usage: String
-        ) {
-            values[path] = Definition(
-                range,
-                values: valueOptions,
-                flags: flagOptions,
-                usage: usage
-            )
-        }
-
-        add(["help"], 0...3, usage: "[command]")
-        add(["version"], 0...0, usage: "")
-        add(["capabilities"], 0...0, usage: "")
-        add(["shell"], 0...0, valueOptions: ["history-file"], flagOptions: ["persist-history"], usage: "")
-        add(["fdb"], 1...64, usage: "<cluster|catalog|raw> ...")
-
-        for action in ["list", "use"] {
-            add(["profile", action], action == "list" ? 0...0 : 1...1, usage: action == "list" ? "" : "<name>")
-        }
-        add(["profile", "create"], 1...1, valueOptions: ["endpoint", "database", "tenant", "workspace", "token-environment"], usage: "<name> --endpoint <url>")
-        add(["profile", "show"], 1...1, usage: "<name>")
-        add(["profile", "remove"], 1...1, usage: "<name>")
-        add(["auth", "login"], 0...0, valueOptions: ["token-environment"], usage: "")
-        add(["auth", "logout"], 0...0, usage: "")
-        add(["schema", "list"], 0...0, usage: "")
-        add(["schema", "show"], 1...1, usage: "<entity>")
-
-        for language in ["sql", "sparql"] {
-            add(["query", language], 1...1, usage: "<statement|@path|@->")
-            add(["mutate", language], 1...1, usage: "<statement|@path|@->")
-        }
-
-        for action in ["insert", "update", "upsert"] {
-            add(["entity", action], 3...3, valueOptions: ["partitions", "expected-version"], flagOptions: ["must-exist", "must-not-exist"], usage: "<entity> <id> <fields>")
-        }
-        add(["entity", "delete"], 2...2, valueOptions: ["partitions", "expected-version"], flagOptions: ["must-exist", "must-not-exist"], usage: "<entity> <id>")
-        add(["entity", "apply"], 1...1, usage: "<manifest>")
-
-        let graphValues: Set<String> = [
-            "index", "partitions", "graph", "edge-label", "source", "target",
-            "maximum-depth", "maximum-nodes", "weight-property", "maximum-weight",
-            "damping-factor", "maximum-iterations", "convergence-threshold",
-            "personalized-source", "minimum-community-size", "seed",
-            "maximum-cycles", "maximum-components",
-        ]
-        let graphFlags: Set<String> = ["bidirectional", "compute-modularity"]
-        for action in [
-            "shortest-path", "weighted-shortest-path", "page-rank", "community",
-            "cycles", "strongly-connected-components", "topological-sort",
-        ] {
-            add(["graph", action], 0...0, valueOptions: graphValues, flagOptions: graphFlags, usage: "--index <name> [options]")
-        }
-
-        add(["ontology", "describe"], 1...1, usage: "<ontology>")
-        add(["ontology", "upsert"], 1...1, valueOptions: ["expected-revision"], usage: "<document>")
-        add(["ontology", "delete"], 1...1, valueOptions: ["expected-revision"], usage: "<ontology>")
-        add(["ontology", "reason"], 1...1, valueOptions: ["profile-kind"], usage: "<ontology>")
-        add(["ontology", "hierarchy"], 2...2, valueOptions: ["resource-kind", "direction", "maximum-depth"], usage: "<ontology> <resource>")
-        add(["ontology", "validate-schema"], 1...1, usage: "<ontology>")
-
-        add(["shacl", "describe"], 1...1, usage: "<graph>")
-        add(["shacl", "upsert"], 2...2, valueOptions: ["expected-revision"], usage: "<graph> <nquads>")
-        add(["shacl", "delete"], 1...1, valueOptions: ["expected-revision"], usage: "<graph>")
-        add(["shacl", "validate"], 1...1, valueOptions: ["entity", "index", "partitions", "data-graph", "focus", "entailment"], usage: "<shapes-graph> --entity <name> --index <name>")
-
-        add(["command", "run"], 2...2, valueOptions: ["access"], usage: "<identifier> <input>")
-        add(["migration", "status"], 0...0, usage: "")
-        add(["migration", "run"], 0...0, valueOptions: ["target-version"], usage: "")
-        add(["index", "status"], 0...0, valueOptions: ["entity", "index", "partitions"], usage: "")
-        add(["index", "rebuild"], 2...2, valueOptions: ["partitions", "batch-size"], usage: "<entity> <index>")
-        add(["maintenance", "compact"], 0...0, usage: "")
-        for action in ["status", "wait", "result", "cancel"] {
-            add(["job", action], 3...3, valueOptions: ["poll-interval-milliseconds", "wait-timeout-milliseconds"], usage: "<job-id> <family> <kind>")
-        }
-        return values
-    }()
-
-    static func definition(for path: [String]) throws -> Definition {
-        guard let definition = definitions[path] else {
-            throw DatabaseCLIError(.input, "Unknown command")
-        }
-        return definition
     }
 }

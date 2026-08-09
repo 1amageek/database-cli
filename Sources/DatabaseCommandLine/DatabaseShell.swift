@@ -1,35 +1,84 @@
 import DatabaseTypes
+import DatabaseWire
 import Foundation
 
 struct DatabaseShell: Sendable {
     let application: DatabaseCLIApplication
     let command: ParsedCommand
     let output: OutputWriter
+    let session: RemoteSession?
+    let connectionName: String?
+    let databaseName: String?
+
+    init(
+        application: DatabaseCLIApplication,
+        command: ParsedCommand,
+        output: OutputWriter,
+        session: RemoteSession? = nil,
+        connectionName: String? = nil,
+        databaseName: String? = nil
+    ) {
+        self.application = application
+        self.command = command
+        self.output = output
+        self.session = session
+        self.connectionName = connectionName
+        self.databaseName = databaseName
+    }
 
     func run() async throws {
-        let input = ShellInputReader()
+        let input = try ShellInputReader()
+        let initialMode = try ShellMode(
+            command.options.value("mode")
+                ?? (command.path == ["open"]
+                    ? ShellMode.sqlQuery.rawValue
+                    : ShellMode.command.rawValue)
+        )
+        let selectedProfile = try application.profiles.selectedProfileIfConfigured(
+            named: command.options.value("profile")
+        )
         var state = State(
-            profile: command.options.value("profile"),
+            profile: selectedProfile?.name ?? command.options.value("profile"),
+            promptConnection: connectionName
+                ?? selectedProfile?.name
+                ?? command.options.value("profile")
+                ?? "unconfigured",
+            database: databaseName ?? selectedProfile?.databaseID ?? "main",
+            mode: initialMode,
             outputFormat: command.options.value("output"),
             pageSize: command.options.value("page-size"),
             persistentHistory: command.options.contains("persist-history"),
             historyURL: try historyURL()
         )
+        var completions = await completionSnapshot(
+            profileName: state.profile,
+            fixedSession: session
+        )
         output.diagnostic(
             "Database shell \(DatabaseCLIVersion.current). Use \\help for commands.\n"
         )
         while true {
-            output.diagnostic(state.multiline == nil ? "database> " : "...> ")
+            if !input.rendersPrompt {
+                output.diagnostic(state.prompt)
+            }
             let line: String
             do {
-                guard let value = try await input.readLine() else {
+                let candidates = state.mode == .command
+                    ? completions.entries
+                    : completions.entries.filter {
+                        $0.context.isEmpty && $0.value.hasPrefix("\\")
+                    }
+                guard let value = try await input.readLine(
+                    prompt: state.prompt,
+                    completions: candidates
+                ) else {
                     output.diagnostic("\n")
                     await input.shutdown()
                     return
                 }
                 line = value
             } catch is ShellInterrupt {
-                state.multiline = nil
+                state.statementLines.removeAll(keepingCapacity: true)
                 output.diagnostic("^C\n")
                 continue
             } catch {
@@ -38,9 +87,16 @@ struct DatabaseShell: Sendable {
             }
             if line.hasPrefix("\\") {
                 do {
+                    let previousProfile = state.profile
                     if try await handleMeta(line, state: &state) {
                         await input.shutdown()
                         return
+                    }
+                    if state.profile != previousProfile {
+                        completions = await completionSnapshot(
+                            profileName: state.profile,
+                            fixedSession: session
+                        )
                     }
                 } catch is CancellationError {
                     await input.shutdown()
@@ -51,23 +107,12 @@ struct DatabaseShell: Sendable {
                 }
                 continue
             }
-            if state.multiline != nil {
-                state.multiline?.lines.append(line)
+            if state.mode != .command {
+                state.statementLines.append(line)
                 continue
             }
             let tokens = try ShellLexer().parse(line)
             guard !tokens.isEmpty else { continue }
-            if tokens.count >= 2,
-               ["query", "mutate"].contains(tokens[0]),
-               ["sql", "sparql"].contains(tokens[1]),
-               (tokens.count == 2 || tokens[2].hasPrefix("--")) {
-                state.multiline = Multiline(
-                    prefix: Array(tokens.prefix(2)),
-                    options: Array(tokens.dropFirst(2)),
-                    lines: []
-                )
-                continue
-            }
             do {
                 try await execute(tokens, state: &state)
             } catch is CancellationError {
@@ -82,23 +127,157 @@ struct DatabaseShell: Sendable {
 }
 
 private extension DatabaseShell {
-    struct Multiline {
-        let prefix: [String]
-        let options: [String]
-        var lines: [String]
+    enum ShellMode: String, Sendable {
+        case command
+        case sqlQuery = "sql-query"
+        case sqlMutation = "sql-mutation"
+        case sparqlQuery = "sparql-query"
+        case sparqlUpdate = "sparql-update"
+
+        init(_ rawValue: String) throws {
+            guard let value = Self(rawValue: rawValue) else {
+                throw DatabaseCLIError(
+                    .input,
+                    "Invalid shell mode '\(rawValue)'"
+                )
+            }
+            self = value
+        }
+
+        var commandPrefix: [String]? {
+            switch self {
+            case .command: nil
+            case .sqlQuery: ["query", "sql"]
+            case .sqlMutation: ["mutate", "sql"]
+            case .sparqlQuery: ["query", "sparql"]
+            case .sparqlUpdate: ["mutate", "sparql"]
+            }
+        }
+
+        var promptLabel: String {
+            switch self {
+            case .command: "command"
+            case .sqlQuery: "sql:query"
+            case .sqlMutation: "sql:mutation"
+            case .sparqlQuery: "sparql:query"
+            case .sparqlUpdate: "sparql:update"
+            }
+        }
     }
 
     struct State {
         var profile: String?
+        var promptConnection: String
+        var database: String
+        var mode: ShellMode
         var outputFormat: String?
         var pageSize: String?
         var timing = false
         var history: [String] = []
         var lastArguments: [String]?
         var lastContinuation: ByteString?
-        var multiline: Multiline?
+        var statementLines: [String] = []
         let persistentHistory: Bool
         let historyURL: URL
+
+        var prompt: String {
+            let suffix = statementLines.isEmpty ? "> " : "...> "
+            return "\(promptConnection)/\(database) [\(mode.promptLabel)]\(suffix)"
+        }
+    }
+
+    func completionSnapshot(
+        profileName: String?,
+        fixedSession: RemoteSession?
+    ) async -> ShellCompletionSnapshot {
+        let profileNames: [String]
+        do {
+            profileNames = try application.profiles.load().profiles
+                .map(\.name)
+                .sorted()
+        } catch {
+            output.diagnostic(
+                "warning: profile completion is unavailable: \(error)\n"
+            )
+            return ShellCompletionSnapshot(
+                catalog: application.parser.catalog,
+                profileNames: []
+            )
+        }
+
+        let activeSession: RemoteSession
+        let ownsSession: Bool
+        do {
+            if let fixedSession {
+                activeSession = fixedSession
+                ownsSession = false
+            } else if let profileName {
+                let options = CommandOptions([
+                    "profile": [profileName],
+                ])
+                activeSession = try application.sessionFactory(
+                    ResolvedConnection.resolve(
+                        options: options,
+                        profileStore: application.profiles,
+                        credentials: application.credentials
+                    )
+                )
+                ownsSession = true
+            } else {
+                return ShellCompletionSnapshot(
+                    catalog: application.parser.catalog,
+                    profileNames: profileNames
+                )
+            }
+        } catch {
+            output.diagnostic(
+                "warning: server completion is unavailable: \(error)\n"
+            )
+            return ShellCompletionSnapshot(
+                catalog: application.parser.catalog,
+                profileNames: profileNames
+            )
+        }
+
+        let capabilities: CapabilitiesDescribeOperation.Response
+        do {
+            capabilities = try await activeSession.client.execute(
+                DatabaseOperations.capabilitiesDescribe,
+                request: EmptyOperationPayload()
+            )
+        } catch {
+            if ownsSession { await activeSession.shutdown() }
+            output.diagnostic(
+                "warning: capability completion is unavailable: \(error)\n"
+            )
+            return ShellCompletionSnapshot(
+                catalog: application.parser.catalog,
+                profileNames: profileNames
+            )
+        }
+
+        var schema: SchemaDescribeOperation.Response?
+        if capabilities.features.contains(where: {
+            $0.identifier == "schema.describe"
+        }) {
+            do {
+                schema = try await activeSession.client.execute(
+                    DatabaseOperations.schemaDescribe,
+                    request: EmptyOperationPayload()
+                )
+            } catch {
+                output.diagnostic(
+                    "warning: schema completion is unavailable: \(error)\n"
+                )
+            }
+        }
+        if ownsSession { await activeSession.shutdown() }
+        return ShellCompletionSnapshot(
+            catalog: application.parser.catalog,
+            profileNames: profileNames,
+            capabilities: capabilities,
+            schema: schema
+        )
     }
 
     func handleMeta(
@@ -119,18 +298,26 @@ private extension DatabaseShell {
                 \\page-size <count>
                 \\next
                 \\history
-                \\mode command
+                \\mode command|sql-query|sql-mutation|sparql-query|sparql-update
                 \\g
                 \\clear
                 \\quit
                 """ + "\n"
             )
         case "\\profile":
+            guard session == nil else {
+                throw DatabaseCLIError(
+                    .input,
+                    "A local database shell cannot switch to a remote profile"
+                )
+            }
             guard tokens.count == 2 else {
                 throw DatabaseCLIError(.input, "Usage: \\profile <name>")
             }
-            _ = try application.profiles.selectedProfile(named: tokens[1])
-            state.profile = tokens[1]
+            let profile = try application.profiles.selectedProfile(named: tokens[1])
+            state.profile = profile.name
+            state.promptConnection = profile.name
+            state.database = profile.databaseID
         case "\\output":
             guard tokens.count == 2,
                   OutputFormat(rawValue: tokens[1]) != nil else {
@@ -182,28 +369,30 @@ private extension DatabaseShell {
                 _ = try output.result("\(index + 1)  \(item)\n")
             }
         case "\\mode":
-            guard tokens == ["\\mode", "command"] else {
-                throw DatabaseCLIError(.input, "Usage: \\mode command")
+            guard tokens.count == 2 else {
+                throw DatabaseCLIError(
+                    .input,
+                    "Usage: \\mode command|sql-query|sql-mutation|sparql-query|sparql-update"
+                )
             }
-            state.multiline = nil
+            state.mode = try ShellMode(tokens[1])
+            state.statementLines.removeAll(keepingCapacity: true)
         case "\\clear":
             guard tokens.count == 1 else {
                 throw DatabaseCLIError(.input, "Usage: \\clear")
             }
-            state.multiline?.lines.removeAll(keepingCapacity: true)
+            state.statementLines.removeAll(keepingCapacity: true)
         case "\\g":
-            guard tokens.count == 1, let multiline = state.multiline else {
-                throw DatabaseCLIError(.input, "No multiline statement is active")
+            guard tokens.count == 1,
+                  let prefix = state.mode.commandPrefix else {
+                throw DatabaseCLIError(.input, "No statement mode is active")
             }
-            let statement = multiline.lines.joined(separator: "\n")
+            let statement = state.statementLines.joined(separator: "\n")
             guard !statement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw DatabaseCLIError(.input, "Statement buffer is empty")
             }
-            state.multiline = nil
-            try await execute(
-                multiline.prefix + [statement] + multiline.options,
-                state: &state
-            )
+            state.statementLines.removeAll(keepingCapacity: true)
+            try await execute(prefix + [statement], state: &state)
         case "\\quit":
             guard tokens.count == 1 else {
                 throw DatabaseCLIError(.input, "Usage: \\quit")
@@ -231,7 +420,8 @@ private extension DatabaseShell {
             try await InterruptibleCommand.runShellOperation {
                 try await application.execute(
                     executionArguments,
-                    continuationCapture: capture
+                    continuationCapture: capture,
+                    sessionOverride: session
                 )
             }
         } catch is ShellInterrupt {
@@ -287,54 +477,15 @@ private extension DatabaseShell {
         if let configured = command.options.value("history-file") {
             return URL(fileURLWithPath: configured)
         }
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent("database", isDirectory: true)
+        return DatabaseCLIPaths.configurationDirectory()
             .appendingPathComponent("history", isDirectory: false)
     }
 
     func appendHistory(_ line: String, to url: URL) throws {
-        let directory = url.deletingLastPathComponent()
         do {
-            try FileManager.default.createDirectory(
-                at: directory,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
-            if !FileManager.default.fileExists(atPath: url.path) {
-                guard FileManager.default.createFile(
-                    atPath: url.path,
-                    contents: nil,
-                    attributes: [.posixPermissions: 0o600]
-                ) else {
-                    throw DatabaseCLIError(.input, "Cannot create history file")
-                }
-            }
-            let handle = try FileHandle(forWritingTo: url)
-            var operationError: (any Error)?
-            do {
-                try handle.seekToEnd()
-                try handle.write(contentsOf: Data((line + "\n").utf8))
-            } catch {
-                operationError = error
-            }
-            do {
-                try handle.close()
-            } catch {
-                if let operationError {
-                    throw DatabaseCLIError(
-                        .input,
-                        "History write failed (\(operationError)) and the file could not be closed (\(error))"
-                    )
-                }
-                throw error
-            }
-            if let operationError {
-                throw operationError
-            }
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o600],
-                ofItemAtPath: url.path
+            try SecureLocalFile.append(
+                Data((line + "\n").utf8),
+                to: url
             )
         } catch let error as DatabaseCLIError {
             throw error

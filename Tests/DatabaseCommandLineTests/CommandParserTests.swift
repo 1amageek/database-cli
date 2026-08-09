@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import DatabaseCommandLine
 
@@ -19,6 +20,15 @@ private let commandFixtures: [CommandFixture] = [
     .init(arguments: ["auth", "logout"], path: ["auth", "logout"]),
     .init(arguments: ["schema", "list"], path: ["schema", "list"]),
     .init(arguments: ["schema", "show", "Person"], path: ["schema", "show"]),
+    .init(arguments: ["schema", "plan", schemaJSON], path: ["schema", "plan"]),
+    .init(
+        arguments: [
+            "schema", "apply", schemaJSON,
+            "--expected-fingerprint", emptyFingerprint,
+            "--idempotency-key", "schema-1",
+        ],
+        path: ["schema", "apply"]
+    ),
     .init(arguments: ["query", "sql", "SELECT 1"], path: ["query", "sql"]),
     .init(arguments: ["query", "sparql", "SELECT * WHERE {}"], path: ["query", "sparql"]),
     .init(arguments: ["mutate", "sql", "DELETE FROM Person"], path: ["mutate", "sql"]),
@@ -28,13 +38,13 @@ private let commandFixtures: [CommandFixture] = [
     .init(arguments: ["entity", "upsert", "Person", idValue, objectValue], path: ["entity", "upsert"]),
     .init(arguments: ["entity", "delete", "Person", idValue], path: ["entity", "delete"]),
     .init(arguments: ["entity", "apply", "[]"], path: ["entity", "apply"]),
-    .init(arguments: ["graph", "shortest-path"], path: ["graph", "shortest-path"]),
-    .init(arguments: ["graph", "weighted-shortest-path"], path: ["graph", "weighted-shortest-path"]),
-    .init(arguments: ["graph", "page-rank"], path: ["graph", "page-rank"]),
-    .init(arguments: ["graph", "community"], path: ["graph", "community"]),
-    .init(arguments: ["graph", "cycles"], path: ["graph", "cycles"]),
-    .init(arguments: ["graph", "strongly-connected-components"], path: ["graph", "strongly-connected-components"]),
-    .init(arguments: ["graph", "topological-sort"], path: ["graph", "topological-sort"]),
+    .init(arguments: ["graph", "shortest-path", "--index", "graph"], path: ["graph", "shortest-path"]),
+    .init(arguments: ["graph", "weighted-shortest-path", "--index", "graph"], path: ["graph", "weighted-shortest-path"]),
+    .init(arguments: ["graph", "page-rank", "--index", "graph"], path: ["graph", "page-rank"]),
+    .init(arguments: ["graph", "community", "--index", "graph"], path: ["graph", "community"]),
+    .init(arguments: ["graph", "cycles", "--index", "graph"], path: ["graph", "cycles"]),
+    .init(arguments: ["graph", "strongly-connected-components", "--index", "graph"], path: ["graph", "strongly-connected-components"]),
+    .init(arguments: ["graph", "topological-sort", "--index", "graph"], path: ["graph", "topological-sort"]),
     .init(arguments: ["ontology", "describe", "world"], path: ["ontology", "describe"]),
     .init(arguments: ["ontology", "upsert", objectValue], path: ["ontology", "upsert"]),
     .init(arguments: ["ontology", "delete", "world"], path: ["ontology", "delete"]),
@@ -44,7 +54,7 @@ private let commandFixtures: [CommandFixture] = [
     .init(arguments: ["shacl", "describe", "urn:shapes"], path: ["shacl", "describe"]),
     .init(arguments: ["shacl", "upsert", "urn:shapes", "<urn:s> <urn:p> <urn:o> ."], path: ["shacl", "upsert"]),
     .init(arguments: ["shacl", "delete", "urn:shapes"], path: ["shacl", "delete"]),
-    .init(arguments: ["shacl", "validate", "urn:shapes"], path: ["shacl", "validate"]),
+    .init(arguments: ["shacl", "validate", "urn:shapes", "--entity", "Person", "--index", "byName"], path: ["shacl", "validate"]),
     .init(arguments: ["command", "run", "system.inspect", objectValue], path: ["command", "run"]),
     .init(arguments: ["migration", "status"], path: ["migration", "status"]),
     .init(arguments: ["migration", "run"], path: ["migration", "run"]),
@@ -56,12 +66,31 @@ private let commandFixtures: [CommandFixture] = [
     .init(arguments: ["job", "result", uuid, "queryExecute", "query"], path: ["job", "result"]),
     .init(arguments: ["job", "cancel", uuid, "queryExecute", "query"], path: ["job", "cancel"]),
     .init(arguments: ["shell"], path: ["shell"]),
+    .init(arguments: ["inspect", "overview"], path: ["inspect", "overview"]),
+    .init(arguments: ["inspect", "entities"], path: ["inspect", "entities"]),
+    .init(arguments: ["inspect", "indexes"], path: ["inspect", "indexes"]),
+    .init(arguments: ["inspect", "graph"], path: ["inspect", "graph"]),
+    .init(arguments: ["inspect", "ontology", "world"], path: ["inspect", "ontology"]),
+    .init(arguments: ["inspect", "shapes", "urn:shapes"], path: ["inspect", "shapes"]),
+    .init(arguments: ["inspect", "jobs"], path: ["inspect", "jobs"]),
+    .init(arguments: ["doctor"], path: ["doctor"]),
+    .init(arguments: ["completion", "bash"], path: ["completion", "bash"]),
+    .init(arguments: ["completion", "zsh"], path: ["completion", "zsh"]),
+    .init(arguments: ["completion", "fish"], path: ["completion", "fish"]),
+    .init(arguments: ["open", "database.sqlite"], path: ["open"]),
+    .init(arguments: ["open", "--memory"], path: ["open"]),
+    .init(
+        arguments: ["serve", "database.sqlite", "--profile", "local"],
+        path: ["serve"]
+    ),
     .init(arguments: ["fdb", "cluster", "status"], path: ["fdb"]),
 ]
 
 private let idValue = #"{"$type":"string","value":"p1"}"#
 private let objectValue = #"{"$type":"object","value":{}}"#
 private let uuid = "00000000-0000-0000-0000-000000000001"
+private let schemaJSON = #"{"formatVersion":1,"schemaVersion":{"major":1,"minor":0,"patch":0},"entities":[]}"#
+private let emptyFingerprint = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 @Test("Every public command parses", arguments: commandFixtures)
 private func parsesEveryCommand(_ fixture: CommandFixture) throws {
@@ -110,4 +139,63 @@ func allRequiresBounds() {
 @Test("A leading meta-command backslash survives shell lexing")
 func preservesMetaCommand() throws {
     #expect(try ShellLexer().parse(#"\profile staging"#) == ["\\profile", "staging"])
+}
+
+@Test("Repeatable scalar parameters and canonical JSON parameters are exclusive")
+func parameterInputContractsAreCatalogDriven() throws {
+    let command = try CommandParser().parse([
+        "query", "sql", "SELECT $1, $2",
+        "--parameter", "$1=int64:42",
+        "--parameter", "$2=string:alice",
+    ])
+    #expect(
+        command.options.values("parameter")
+            == ["$1=int64:42", "$2=string:alice"]
+    )
+    #expect(throws: DatabaseCLIError.self) {
+        try CommandParser().parse([
+            "query", "sql", "SELECT $1",
+            "--parameter", "$1=int64:42",
+            "--parameters", #"{"$1":{"$type":"int64","value":"42"}}"#,
+        ])
+    }
+}
+
+@Test("Required command options are reported before wire construction")
+func requiredOptionsAreValidatedByCatalog() {
+    #expect(throws: DatabaseCLIError.self) {
+        try CommandParser().parse(["graph", "shortest-path"])
+    }
+    #expect(throws: DatabaseCLIError.self) {
+        try CommandParser().parse(["shacl", "validate", "urn:shapes"])
+    }
+    #expect(throws: DatabaseCLIError.self) {
+        try CommandParser().parse(["schema", "apply", schemaJSON])
+    }
+    #expect(throws: DatabaseCLIError.self) {
+        try CommandParser().parse(["serve", "database.sqlite"])
+    }
+}
+
+@Test("Listener syntax preserves host and port without inference")
+func parsesListenerAddress() throws {
+    let application = DatabaseCLIApplication(output: .discardedForTests)
+    let ipv4 = try application.parseListener("127.0.0.1:7878")
+    #expect(ipv4.host == "127.0.0.1")
+    #expect(ipv4.port == 7_878)
+    let ipv6 = try application.parseListener("[::1]:7878")
+    #expect(ipv6.host == "::1")
+    #expect(ipv6.port == 7_878)
+    #expect(throws: DatabaseCLIError.self) {
+        try application.parseListener("127.0.0.1")
+    }
+}
+
+private extension OutputWriter {
+    static var discardedForTests: OutputWriter {
+        OutputWriter(
+            resultHandle: .nullDevice,
+            diagnosticHandle: .nullDevice
+        )
+    }
 }

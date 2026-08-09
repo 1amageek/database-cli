@@ -1,9 +1,10 @@
 import DatabaseTypes
+import DatabaseWire
 import Foundation
 import Synchronization
 
 public enum DatabaseCLIVersion {
-    public static let current = "26.0808.1"
+    public static let current = "26.0809.0"
 }
 
 public typealias RemoteSessionFactory = @Sendable (
@@ -16,12 +17,14 @@ public struct DatabaseCLIApplication: Sendable {
     let credentials: CredentialResolver
     let output: OutputWriter
     let sessionFactory: RemoteSessionFactory
+    let networkProbe: any DatabaseNetworkProbing
 
     public init(
         parser: CommandParser = CommandParser(),
         profiles: ProfileStore = ProfileStore(),
         credentials: CredentialResolver = CredentialResolver(),
         output: OutputWriter = OutputWriter(),
+        networkProbe: any DatabaseNetworkProbing = DefaultDatabaseNetworkProbe(),
         sessionFactory: @escaping RemoteSessionFactory = {
             try RemoteSession(connection: $0)
         }
@@ -30,12 +33,17 @@ public struct DatabaseCLIApplication: Sendable {
         self.profiles = profiles
         self.credentials = credentials
         self.output = output
+        self.networkProbe = networkProbe
         self.sessionFactory = sessionFactory
     }
 
     public func run(arguments: [String]) async -> Int32 {
         do {
-            try await execute(arguments, continuationCapture: nil)
+            try await execute(
+                arguments,
+                continuationCapture: nil,
+                sessionOverride: nil
+            )
             return DatabaseCLIExitCode.success.rawValue
         } catch let companion as CompanionExit {
             return companion.code
@@ -50,7 +58,8 @@ public struct DatabaseCLIApplication: Sendable {
 extension DatabaseCLIApplication {
     func execute(
         _ arguments: [String],
-        continuationCapture: ContinuationCapture?
+        continuationCapture: ContinuationCapture?,
+        sessionOverride: RemoteSession?
     ) async throws {
         if arguments.first == "fdb" {
             try await runFDBCompanion(
@@ -72,9 +81,32 @@ extension DatabaseCLIApplication {
             try await DatabaseShell(
                 application: self,
                 command: command,
-                output: output
+                output: output,
+                session: sessionOverride
             ).run()
+        case ["open"]:
+            try await executeOpen(command)
+        case ["serve"]:
+            try await executeServe(command)
+        case let path where path.first == "completion":
+            _ = try output.result(
+                CompletionGenerator(catalog: parser.catalog).generate(
+                    for: path[1]
+                )
+            )
+        case ["doctor"]:
+            try await executeDoctor(command)
         default:
+            if let sessionOverride {
+                try await RemoteCommandExecutor(
+                    session: sessionOverride,
+                    output: output,
+                    continuationSink: { continuation in
+                        continuationCapture?.store(continuation)
+                    }
+                ).execute(command)
+                return
+            }
             let connection = try ResolvedConnection.resolve(
                 options: command.options,
                 profileStore: profiles,
@@ -97,57 +129,387 @@ extension DatabaseCLIApplication {
         }
     }
 
+    func executeOpen(_ command: ParsedCommand) async throws {
+        let memory = command.options.contains("memory")
+        let path = command.positionals.first
+        guard memory != (path != nil) else {
+            throw DatabaseCLIError(
+                .input,
+                "Exactly one database path or '--memory' is required"
+            )
+        }
+        let maximumFrameBytes = try command.options.integer(
+            "maximum-frame-bytes",
+            default: 16 * 1_024 * 1_024
+        )
+        guard maximumFrameBytes > 0 else {
+            throw DatabaseCLIError(
+                .input,
+                "'--maximum-frame-bytes' must be positive"
+            )
+        }
+        let local = try await LocalDatabaseSession.open(
+            executable: DatabaseServerExecutable.adjacent(),
+            path: path,
+            memory: memory,
+            maximumFrameBytes: maximumFrameBytes
+        )
+        do {
+            let capabilities = try await local.remoteSession.client.execute(
+                DatabaseOperations.capabilitiesDescribe,
+                request: EmptyOperationPayload()
+            )
+            guard capabilities.features.contains(where: {
+                $0.identifier == "schema.execute" && $0.version == 1
+            }) else {
+                throw DatabaseCLIError(
+                    .unavailable,
+                    "database-server does not advertise schema.execute version 1"
+                )
+            }
+            if let schema = command.options.value("schema") {
+                try await applySchema(
+                    schema,
+                    to: local.remoteSession
+                )
+            }
+            try await DatabaseShell(
+                application: self,
+                command: command,
+                output: output,
+                session: local.remoteSession,
+                connectionName: "local",
+                databaseName: "main"
+            ).run()
+            await local.shutdown()
+        } catch {
+            await local.shutdown()
+            throw error
+        }
+    }
+
+    func executeServe(_ command: ParsedCommand) async throws {
+        guard let profileName = command.options.value("profile") else {
+            throw DatabaseCLIError(.input, "Database serve requires '--profile'")
+        }
+        let explicitConfiguration = command.options.value("config")
+        let databasePath = command.positionals.first.map {
+            URL(fileURLWithPath: $0).standardizedFileURL.path
+        }
+        if explicitConfiguration != nil, databasePath != nil {
+            throw DatabaseCLIError(
+                .input,
+                "A database path cannot be combined with '--config'"
+            )
+        }
+        if explicitConfiguration == nil, databasePath == nil {
+            throw DatabaseCLIError(
+                .input,
+                "Database serve requires a path or '--config'"
+            )
+        }
+        let configurationURL = try serverConfigurationURL(
+            explicit: explicitConfiguration,
+            profileName: profileName
+        )
+        let listener = try command.options.value("listen")
+            .map(parseListener)
+        let executable = try DatabaseServerExecutable.adjacent()
+        let originalDocument = try profiles.load()
+        let originalStoredToken = try credentials.storedToken(
+            profile: profileName
+        )
+        var profileWasCreated = false
+        var credentialWasChanged = false
+        var preparationCommitted = false
+
+        do {
+            let bootstrap = try await DatabaseServerBootstrap(
+                executable: executable
+            ).prepare(
+                request: .init(
+                    configurationURL: configurationURL,
+                    databasePath: databasePath,
+                    host: listener?.host,
+                    port: listener?.port,
+                    databaseID: command.options.value("database") ?? "main",
+                    tenantID: command.options.value("tenant"),
+                    workspaceID: command.options.value("workspace")
+                )
+            ) { response in
+                let profile = try DatabaseProfile(
+                    name: profileName,
+                    endpoint: response.endpoint,
+                    databaseID: response.databaseID,
+                    tenantID: response.tenantID,
+                    workspaceID: response.workspaceID
+                )
+                var document = originalDocument
+                if let existing = document.profiles.first(where: {
+                    $0.name == profileName
+                }) {
+                    guard existing.endpoint == profile.endpoint,
+                          existing.databaseID == profile.databaseID,
+                          existing.tenantID == profile.tenantID,
+                          existing.workspaceID == profile.workspaceID else {
+                        throw DatabaseCLIError(
+                            .conflict,
+                            "Profile '\(profileName)' points to a different server"
+                        )
+                    }
+                } else {
+                    document.profiles.append(profile)
+                    if document.activeProfile == nil {
+                        document.activeProfile = profileName
+                    }
+                    try profiles.save(document)
+                    profileWasCreated = true
+                }
+
+                if let token = response.token {
+                    try credentials.storeToken(token, profile: profileName)
+                    credentialWasChanged = true
+                } else if originalStoredToken == nil {
+                    throw DatabaseCLIError(
+                        .authentication,
+                        "The server already has credentials, but profile '\(profileName)' has no Keychain token"
+                    )
+                }
+            }
+            preparationCommitted = true
+
+            output.diagnostic(
+                "Serving \(bootstrap.endpoint) with profile '\(profileName)'.\n"
+            )
+            try await DatabaseServerForegroundProcess(
+                executable: executable
+            ).run(
+                configurationURL: configurationURL,
+                host: listener?.host,
+                port: listener?.port
+            )
+        } catch {
+            let originalError = error
+            guard !preparationCommitted else {
+                throw originalError
+            }
+            do {
+                if credentialWasChanged {
+                    if let originalStoredToken {
+                        try credentials.storeToken(
+                            originalStoredToken,
+                            profile: profileName
+                        )
+                    } else {
+                        try credentials.removeToken(profile: profileName)
+                    }
+                }
+                if profileWasCreated {
+                    try profiles.save(originalDocument)
+                }
+            } catch {
+                throw DatabaseCLIError(
+                    .internalFailure,
+                    "Database serve failed and client state rollback also failed: \(error)"
+                )
+            }
+            throw originalError
+        }
+    }
+
+    func serverConfigurationURL(
+        explicit: String?,
+        profileName: String
+    ) throws -> URL {
+        if let explicit {
+            guard explicit != "@-" else {
+                throw DatabaseCLIError(
+                    .input,
+                    "Server configuration must be a filesystem path"
+                )
+            }
+            let path = explicit.hasPrefix("@")
+                ? String(explicit.dropFirst())
+                : explicit
+            guard !path.isEmpty else {
+                throw DatabaseCLIError(.input, "Server configuration path is empty")
+            }
+            return URL(fileURLWithPath: path).standardizedFileURL
+        }
+        return DatabaseCLIPaths.configurationDirectory()
+            .appendingPathComponent("servers", isDirectory: true)
+            .appendingPathComponent(profileName, isDirectory: true)
+            .appendingPathComponent("server.json", isDirectory: false)
+    }
+
+    func parseListener(_ rawValue: String) throws -> (host: String, port: Int) {
+        guard let components = URLComponents(string: "tcp://\(rawValue)"),
+              components.scheme == "tcp",
+              let parsedHost = components.host,
+              !parsedHost.isEmpty,
+              let port = components.port,
+              (1...65_535).contains(port),
+              components.user == nil,
+              components.password == nil,
+              components.path.isEmpty else {
+            throw DatabaseCLIError(
+                .input,
+                "Listener must use 'host:port' or '[ipv6]:port'"
+            )
+        }
+        let host: String
+        if parsedHost.hasPrefix("["), parsedHost.hasSuffix("]") {
+            host = String(parsedHost.dropFirst().dropLast())
+        } else {
+            host = parsedHost
+        }
+        return (host, port)
+    }
+
+    func applySchema(
+        _ specification: String,
+        to session: RemoteSession
+    ) async throws {
+        let manifest = try WireRequestBuilder().schemaManifest(specification)
+        let planResponse = try await session.client.execute(
+            DatabaseOperations.schemaExecute,
+            request: SchemaExecuteOperation.Request(
+                invocation: .plan(
+                    manifest: manifest,
+                    expectedFingerprint: nil
+                )
+            )
+        )
+        guard case .plan(let plan) = planResponse else {
+            throw DatabaseCLIError(
+                .internalFailure,
+                "Schema plan returned an unexpected response"
+            )
+        }
+        guard let currentFingerprint = plan.currentFingerprint else {
+            throw DatabaseCLIError(
+                .internalFailure,
+                "Schema plan did not return the current fingerprint"
+            )
+        }
+
+        let idempotencyKey = "database-open-\(UUID().uuidString.lowercased())"
+        let applyResponse = try await session.client.execute(
+            DatabaseOperations.schemaExecute,
+            request: SchemaExecuteOperation.Request(
+                invocation: .apply(
+                    manifest: manifest,
+                    expectedFingerprint: currentFingerprint,
+                    idempotencyKey: idempotencyKey
+                )
+            ),
+            metadata: OperationRequestMetadata(
+                idempotencyKey: idempotencyKey
+            )
+        )
+        guard case .applied(let applied) = applyResponse else {
+            throw DatabaseCLIError(
+                .internalFailure,
+                "Schema apply returned an unexpected response"
+            )
+        }
+        output.diagnostic(
+            "Applied schema \(applied.schemaVersion) at generation \(applied.generation).\n"
+        )
+    }
+
     func showHelp(_ path: [String]) throws {
-        let heading = path.isEmpty
-            ? "database — authenticated DatabaseWire command line"
-            : "database \(path.joined(separator: " "))"
-        let text = """
-        \(heading)
+        let catalog = parser.catalog
+        if let command = catalog.command(for: path) {
+            var text = "database \(command.path.joined(separator: " "))"
+            text += " — \(command.summary)\n\n"
+            text += "Usage:\n  database \(command.path.joined(separator: " "))"
+            if !command.usage.isEmpty { text += " \(command.usage)" }
+            if !command.options.isEmpty || shouldShowCommonOptions(for: command) {
+                text += " [options]"
+            }
+            text += "\n"
+            if let capability = command.capability {
+                text += "\nCapability:\n  \(capability)\n"
+            }
+            let options = command.options
+                + (shouldShowCommonOptions(for: command)
+                    ? catalog.commonOptions.filter {
+                        command.option(named: $0.name) == nil
+                    }
+                    : [])
+            if !options.isEmpty {
+                text += "\nOptions:\n"
+                for option in options.sorted(by: { $0.name < $1.name }) {
+                    text += helpLine(for: option)
+                }
+            }
+            _ = try output.result(text + "\n")
+            return
+        }
 
-        Usage:
-          database <command> [options]
-          database shell [--persist-history]
+        let matches = catalog.commands.filter {
+            path.isEmpty || $0.path.starts(with: path)
+        }.sorted {
+            $0.path.lexicographicallyPrecedes($1.path)
+        }
+        guard !matches.isEmpty else {
+            throw DatabaseCLIError(
+                .input,
+                "Unknown help topic '\(path.joined(separator: " "))'"
+            )
+        }
+        var text = path.isEmpty
+            ? "database — authenticated DatabaseWire command line\n\n"
+            : "database \(path.joined(separator: " "))\n\n"
+        text += "Usage:\n  database <command> [options]\n\nCommands:\n"
+        for command in matches where command.path != ["help"] {
+            text += "  \(command.path.joined(separator: " "))"
+            if !command.usage.isEmpty { text += " \(command.usage)" }
+            text += "\n      \(command.summary)\n"
+        }
+        text += "\nUse 'database help <command>' for exact options.\n"
+        _ = try output.result(text)
+    }
 
-        Commands:
-          profile create|list|show|use|remove
-          auth login|logout
-          capabilities
-          schema list|show
-          query sql|sparql
-          mutate sql|sparql
-          entity insert|update|upsert|delete|apply
-          graph shortest-path|weighted-shortest-path|page-rank|community
-          graph cycles|strongly-connected-components|topological-sort
-          ontology describe|upsert|delete|reason|hierarchy|validate-schema
-          shacl describe|upsert|delete|validate
-          command run
-          migration status|run
-          index status|rebuild
-          maintenance compact
-          job status|wait|result|cancel
-          fdb cluster|catalog|raw
+    func shouldShowCommonOptions(for command: CommandDescriptor) -> Bool {
+        guard let root = command.path.first else { return false }
+        return ![
+            "help", "version", "profile", "auth", "completion", "fdb",
+            "open", "serve",
+        ]
+            .contains(root)
+    }
 
-        Common connection options:
-          --profile <name>
-          --endpoint <http[s]://...|ws[s]://...>
-          --database <id> --tenant <id> --workspace <id>
-
-        Common execution options:
-          --trace-id <id> --idempotency-key <key>
-          --maximum-rows <n> --maximum-work-units <n>
-          --maximum-intermediate-rows <n>
-          --maximum-intermediate-bytes <n>
-          --timeout-milliseconds <n>
-          --page-size <n> --continuation <base64url>
-          --output table|jsonl|json|csv|nquads
-          --as-job <advertised-kind>
-
-        Fetching every page requires all three safety limits:
-          --all --max-total-rows <n> --max-total-bytes <n> --max-pages <n>
-
-        Structured values accept inline JSON, @path, or @- for stdin.
-        """
-        _ = try output.result(text + "\n")
+    func helpLine(for option: CommandOptionDescriptor) -> String {
+        var spelling = "  --\(option.name)"
+        if case .value(let name) = option.valueMode {
+            spelling += " <\(name)>"
+        }
+        var contracts: [String] = []
+        if option.minimumOccurrences > 0 { contracts.append("required") }
+        if option.maximumOccurrences == nil { contracts.append("repeatable") }
+        if let value = option.defaultValue {
+            contracts.append("default: \(value)")
+        }
+        if !option.conflictsWith.isEmpty {
+            contracts.append(
+                "conflicts: "
+                    + option.conflictsWith.sorted().map { "--\($0)" }
+                        .joined(separator: ", ")
+            )
+        }
+        if !option.requires.isEmpty {
+            contracts.append(
+                "requires: "
+                    + option.requires.sorted().map { "--\($0)" }
+                        .joined(separator: ", ")
+            )
+        }
+        let contract = contracts.isEmpty
+            ? ""
+            : " [\(contracts.joined(separator: "; "))]"
+        return "\(spelling)\(contract)\n      \(option.summary)\n"
     }
 
     func executeProfile(_ command: ParsedCommand) throws {

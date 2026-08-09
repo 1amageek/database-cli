@@ -27,7 +27,14 @@
 
 - Use `scripts/xcode-test-harness` with the pinned Swift snapshot and an
   external timeout. The harness must report exact counts and zero skips,
-  expected failures, runtime warnings, or internal tool errors.
+  expected failures, runtime warnings, or internal tool errors. The reviewed
+  contract is 48 logical tests.
+- Use `scripts/process-test-harness` with adjacent, version-matched
+  `database`, `database-fdb`, and `database-server` executables. It owns a
+  disposable `DATABASE_CLI_CONFIG_HOME`, profile, Keychain credential, and
+  SQLite file; it must prove authenticated serve reachability, SIGINT child
+  shutdown, controlling-terminal Tab completion, and negative readiness before
+  cleanup.
 - FoundationDB integration uses `scripts/fdb-test-harness`, an isolated cluster
   file, protocol readiness, authoritative shutdown, and negative readiness
   after teardown.

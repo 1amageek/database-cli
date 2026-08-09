@@ -1,33 +1,12 @@
-_database_completion() {
-  local current previous top
-  COMPREPLY=()
-  current="${COMP_WORDS[COMP_CWORD]}"
-  previous="${COMP_WORDS[COMP_CWORD-1]}"
-  top="${COMP_WORDS[1]}"
-
-  if [[ "$current" == --* ]]; then
-    COMPREPLY=( $(compgen -W '--profile --endpoint --database --tenant --workspace --trace-id --idempotency-key --maximum-rows --maximum-work-units --maximum-intermediate-rows --maximum-intermediate-bytes --timeout-milliseconds --page-size --continuation --output --as-job --all --max-total-rows --max-total-bytes --max-pages --help' -- "$current") )
-    return
-  fi
-  if (( COMP_CWORD == 1 )); then
-    COMPREPLY=( $(compgen -W 'profile auth capabilities schema query mutate entity graph ontology shacl command migration index maintenance job shell fdb' -- "$current") )
-    return
-  fi
-  case "$top" in
-    profile) COMPREPLY=( $(compgen -W 'create list show use remove' -- "$current") ) ;;
-    auth) COMPREPLY=( $(compgen -W 'login logout' -- "$current") ) ;;
-    schema) COMPREPLY=( $(compgen -W 'list show' -- "$current") ) ;;
-    query|mutate) COMPREPLY=( $(compgen -W 'sql sparql' -- "$current") ) ;;
-    entity) COMPREPLY=( $(compgen -W 'insert update upsert delete apply' -- "$current") ) ;;
-    graph) COMPREPLY=( $(compgen -W 'shortest-path weighted-shortest-path page-rank community cycles strongly-connected-components topological-sort' -- "$current") ) ;;
-    ontology) COMPREPLY=( $(compgen -W 'describe upsert delete reason hierarchy validate-schema' -- "$current") ) ;;
-    shacl) COMPREPLY=( $(compgen -W 'describe upsert delete validate' -- "$current") ) ;;
-    command) COMPREPLY=( $(compgen -W 'run' -- "$current") ) ;;
-    migration) COMPREPLY=( $(compgen -W 'status run' -- "$current") ) ;;
-    index) COMPREPLY=( $(compgen -W 'status rebuild' -- "$current") ) ;;
-    maintenance) COMPREPLY=( $(compgen -W 'compact' -- "$current") ) ;;
-    job) COMPREPLY=( $(compgen -W 'status wait result cancel' -- "$current") ) ;;
-    fdb) COMPREPLY=( $(compgen -W 'cluster catalog raw' -- "$current") ) ;;
-  esac
+_database() {
+    local current="${COMP_WORDS[COMP_CWORD]}"
+    local prefix="${COMP_WORDS[*]:1:COMP_CWORD-1}"
+    local commands="auth login auth logout capabilities command run completion bash completion fish completion zsh doctor entity apply entity delete entity insert entity update entity upsert fdb graph community graph cycles graph page-rank graph shortest-path graph strongly-connected-components graph topological-sort graph weighted-shortest-path index rebuild index status inspect entities inspect graph inspect indexes inspect jobs inspect ontology inspect overview inspect shapes job cancel job result job status job wait maintenance compact migration run migration status mutate sparql mutate sql ontology delete ontology describe ontology hierarchy ontology reason ontology upsert ontology validate-schema open profile create profile list profile remove profile show profile use query sparql query sql schema apply schema list schema plan schema show serve shacl delete shacl describe shacl upsert shacl validate shell version"
+    if [[ -z "$prefix" ]]; then
+        COMPREPLY=( $(compgen -W "auth capabilities command completion doctor entity fdb graph help index inspect job maintenance migration mutate ontology open profile query schema serve shacl shell version" -- "$current") )
+    else
+        COMPREPLY=( $(compgen -W "$commands" -- "$prefix $current") )
+        COMPREPLY=( "${COMPREPLY[@]#"$prefix "}" )
+    fi
 }
-complete -F _database_completion database
+complete -F _database database

@@ -1,4 +1,5 @@
 import DatabaseKit
+import DatabaseSchemaJSON
 import DatabaseTypes
 import DatabaseWire
 import Foundation
@@ -6,6 +7,7 @@ import Foundation
 struct WireRequestBuilder: Sendable {
     let input = InputSource()
     let fieldDecoder = FieldValueJSONDecoder()
+    let scalarDecoder = ExplicitScalarLiteralDecoder()
 
     func executionOptions(_ command: ParsedCommand) throws -> ExecutionOptions {
         try ExecutionOptions(options: command.options)
@@ -16,6 +18,65 @@ struct WireRequestBuilder: Sendable {
         specification: String
     ) throws -> QueryExecuteOperation.Input {
         .text(language: language, statement: try input.read(specification))
+    }
+
+    func schemaExecutionRequest(
+        _ command: ParsedCommand
+    ) throws -> SchemaExecuteOperation.Request {
+        let manifest = try schemaManifest(command.positionals[0])
+
+        let expectedFingerprint = try command.options
+            .value("expected-fingerprint")
+            .map(schemaFingerprint)
+        switch command.path {
+        case ["schema", "plan"]:
+            return SchemaExecuteOperation.Request(
+                invocation: .plan(
+                    manifest: manifest,
+                    expectedFingerprint: expectedFingerprint
+                )
+            )
+        case ["schema", "apply"]:
+            guard let expectedFingerprint else {
+                throw DatabaseCLIError(
+                    .input,
+                    "Schema apply requires '--expected-fingerprint'"
+                )
+            }
+            guard let idempotencyKey = command.options.value("idempotency-key"),
+                  !idempotencyKey.isEmpty else {
+                throw DatabaseCLIError(
+                    .input,
+                    "Schema apply requires '--idempotency-key'"
+                )
+            }
+            return SchemaExecuteOperation.Request(
+                invocation: .apply(
+                    manifest: manifest,
+                    expectedFingerprint: expectedFingerprint,
+                    idempotencyKey: idempotencyKey
+                )
+            )
+        default:
+            throw DatabaseCLIError(.input, "Unsupported schema execution command")
+        }
+    }
+
+    func schemaManifest(_ specification: String) throws -> SchemaManifest {
+        let manifestText = try input.read(specification)
+        let manifest: SchemaManifest
+        do {
+            manifest = try SchemaJSONCodec().decode(manifestText)
+        } catch let error {
+            switch error {
+            case .inputTooLarge, .collectionTooLarge, .nestingTooDeep,
+                    .outputTooLarge:
+                throw DatabaseCLIError(.resourceLimit, error.description)
+            default:
+                throw DatabaseCLIError(.input, error.description)
+            }
+        }
+        return manifest
     }
 
     func queryRequest(
@@ -102,6 +163,9 @@ struct WireRequestBuilder: Sendable {
     }
 
     func parameters(_ options: CommandOptions) throws -> [QueryParameter] {
+        if options.value("parameters") == nil {
+            return try scalarParameters(options.values("parameter"))
+        }
         guard let specification = options.value("parameters") else { return [] }
         let node = try StrictJSONParser().parse(input.read(specification))
         let entries = try node.array(named: "parameters")
@@ -124,6 +188,68 @@ struct WireRequestBuilder: Sendable {
                 )
             )
         }
+    }
+
+    func scalarParameters(_ bindings: [String]) throws -> [QueryParameter] {
+        var parameters: [QueryParameter] = []
+        parameters.reserveCapacity(bindings.count)
+        var usedPositions = Set<UInt32>()
+        var usedNames = Set<String>()
+        for binding in bindings {
+            guard let separator = binding.firstIndex(of: "=") else {
+                throw DatabaseCLIError(
+                    .input,
+                    "Parameter binding must use '<selector>=<typed-literal>'"
+                )
+            }
+            let selector = String(binding[..<separator])
+            let literal = String(binding[binding.index(after: separator)...])
+            guard !selector.isEmpty, !literal.isEmpty else {
+                throw DatabaseCLIError(.input, "Parameter binding is empty")
+            }
+            let position: UInt32
+            let name: String?
+            if selector.first == "$" {
+                guard let parsed = UInt32(selector.dropFirst()), parsed > 0 else {
+                    throw DatabaseCLIError(.input, "Parameter position is invalid")
+                }
+                position = parsed
+                name = nil
+            } else {
+                guard usedNames.insert(selector).inserted else {
+                    throw DatabaseCLIError(
+                        .input,
+                        "Duplicate parameter name '\(selector)'"
+                    )
+                }
+                var candidate: UInt32 = 1
+                while usedPositions.contains(candidate) {
+                    guard candidate < UInt32.max else {
+                        throw DatabaseCLIError(
+                            .resourceLimit,
+                            "Parameter position space is exhausted"
+                        )
+                    }
+                    candidate += 1
+                }
+                position = candidate
+                name = selector
+            }
+            guard usedPositions.insert(position).inserted else {
+                throw DatabaseCLIError(
+                    .input,
+                    "Duplicate parameter position '$\(position)'"
+                )
+            }
+            parameters.append(
+                QueryParameter(
+                    position: position,
+                    name: name,
+                    value: try scalarDecoder.decode(literal)
+                )
+            )
+        }
+        return parameters
     }
 
     func objectOption(
@@ -159,9 +285,13 @@ struct WireRequestBuilder: Sendable {
         default: throw DatabaseCLIError(.input, "Unknown entity mutation")
         }
         let entity = command.positionals[0]
-        let identifierValue = try fieldDecoder.decode(
-            input.read(command.positionals[1])
-        )
+        let identifierSpecification = try input.read(command.positionals[1])
+        let identifierValue: FieldValue
+        if identifierSpecification.first == "{" {
+            identifierValue = try fieldDecoder.decode(identifierSpecification)
+        } else {
+            identifierValue = try scalarDecoder.decode(identifierSpecification)
+        }
         let partitions = try objectOption("partitions", options: command.options)
         let identity = try EntityReference(
             entity: entity,
@@ -436,6 +566,19 @@ struct WireRequestBuilder: Sendable {
 }
 
 private extension WireRequestBuilder {
+    func schemaFingerprint(_ value: String) throws -> SchemaFingerprint {
+        do {
+            return try SchemaFingerprint(Base64URL.decode(value))
+        } catch let error as DatabaseCLIError {
+            throw error
+        } catch {
+            throw DatabaseCLIError(
+                .input,
+                "Invalid schema fingerprint: \(error)"
+            )
+        }
+    }
+
     func queryLanguage(
         _ command: ParsedCommand
     ) throws -> QueryExecuteOperation.Language {

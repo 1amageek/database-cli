@@ -1,62 +1,7 @@
 #compdef database
-
-local -a commands common_options
-commands=(
-  'profile:manage connection profiles'
-  'auth:manage profile credentials'
-  'capabilities:describe server capabilities'
-  'schema:describe schema entities'
-  'query:execute SQL or SPARQL query'
-  'mutate:execute SQL or SPARQL mutation'
-  'entity:apply typed entity changes'
-  'graph:run graph algorithms'
-  'ontology:manage and reason over ontologies'
-  'shacl:manage shapes and validate data'
-  'command:run a registered command'
-  'migration:inspect or run migrations'
-  'index:inspect or rebuild indexes'
-  'maintenance:run maintenance'
-  'job:inspect or control jobs'
-  'shell:start the explicit interactive shell'
-  'fdb:run the FoundationDB companion'
-)
-common_options=(
-  '--profile[connection profile]:name'
-  '--endpoint[temporary endpoint override]:url'
-  '--database[database identifier]:id'
-  '--tenant[tenant routing identifier]:id'
-  '--workspace[workspace routing identifier]:id'
-  '--trace-id[request trace identifier]:id'
-  '--idempotency-key[idempotency key]:key'
-  '--page-size[page row count]:count'
-  '--continuation[base64url continuation]:token'
-  '--output[result format]:(table jsonl json csv nquads)'
-  '--as-job[advertised job kind]:kind'
-  '--all[fetch every bounded page]'
-  '--max-total-rows[aggregate row limit]:count'
-  '--max-total-bytes[aggregate byte limit]:bytes'
-  '--max-pages[aggregate page limit]:count'
-)
-
-_arguments -C $common_options '1:command:->command' '*::argument:->arguments'
-case "$state" in
-  command) _describe 'database command' commands ;;
-  arguments)
-    case "$words[2]" in
-      profile) _values action create list show use remove ;;
-      auth) _values action login logout ;;
-      schema) _values action list show ;;
-      query|mutate) _values language sql sparql ;;
-      entity) _values action insert update upsert delete apply ;;
-      graph) _values algorithm shortest-path weighted-shortest-path page-rank community cycles strongly-connected-components topological-sort ;;
-      ontology) _values action describe upsert delete reason hierarchy validate-schema ;;
-      shacl) _values action describe upsert delete validate ;;
-      command) _values action run ;;
-      migration) _values action status run ;;
-      index) _values action status rebuild ;;
-      maintenance) _values action compact ;;
-      job) _values action status wait result cancel ;;
-      fdb) _values family cluster catalog raw ;;
-    esac
-  ;;
-esac
+_database() {
+    local -a commands
+    commands=('auth login' 'auth logout' 'capabilities' 'command run' 'completion bash' 'completion fish' 'completion zsh' 'doctor' 'entity apply' 'entity delete' 'entity insert' 'entity update' 'entity upsert' 'fdb' 'graph community' 'graph cycles' 'graph page-rank' 'graph shortest-path' 'graph strongly-connected-components' 'graph topological-sort' 'graph weighted-shortest-path' 'index rebuild' 'index status' 'inspect entities' 'inspect graph' 'inspect indexes' 'inspect jobs' 'inspect ontology' 'inspect overview' 'inspect shapes' 'job cancel' 'job result' 'job status' 'job wait' 'maintenance compact' 'migration run' 'migration status' 'mutate sparql' 'mutate sql' 'ontology delete' 'ontology describe' 'ontology hierarchy' 'ontology reason' 'ontology upsert' 'ontology validate-schema' 'open' 'profile create' 'profile list' 'profile remove' 'profile show' 'profile use' 'query sparql' 'query sql' 'schema apply' 'schema list' 'schema plan' 'schema show' 'serve' 'shacl delete' 'shacl describe' 'shacl upsert' 'shacl validate' 'shell' 'version')
+    _describe 'database command' commands
+}
+compdef _database database

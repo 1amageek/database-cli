@@ -6,6 +6,7 @@
 |---|---|
 | `capabilities` | `capabilitiesDescribe` |
 | `schema list/show` | `schemaDescribe` |
+| `schema plan/apply` | `schemaExecute` |
 | `query sql/sparql` | `queryExecute` |
 | `mutate sql/sparql`, `entity ...` | `mutationExecute` |
 | `graph ...` | `graphAlgorithm` |
@@ -15,6 +16,22 @@
 | `migration`, `index`, `maintenance` | `maintenanceExecute` |
 | supported commands with `--as-job` | `capabilitiesDescribe`, then `jobStart` |
 | `job status/wait/result/cancel` | corresponding job operation |
+
+`open`, `serve`, `inspect`, `doctor`, and `completion` are client-side
+composition commands. `open` and `serve` launch the adjacent native server;
+`inspect` and `doctor` compose existing read-only operations; completion is
+generated from the immutable command catalog.
+
+`doctor` evaluates the following ordered boundaries without issuing a write:
+
+```text
+installation / local configuration / credential availability
+    -> DNS -> TCP -> TLS when selected
+        -> authenticated capabilities -> schema describe
+```
+
+An earlier boundary failure marks dependent checks as `skipped`; it is never
+converted to an empty successful database result.
 
 `--as-job <kind>` is accepted only when the server advertises the exact
 operation family and kind. `job wait` performs bounded status polling; it does
@@ -53,9 +70,13 @@ command mode
 Multiline statements execute only with `\g`; semicolons do not trigger
 execution and the CLI does not infer read versus write intent.
 
+Shell modes are `command`, `sql-query`, `sql-mutation`, `sparql-query`, and
+`sparql-update`. Mode changes are explicit; SQL or SPARQL read/write intent is
+never inferred.
+
 Meta commands are `\help`, `\profile`, `\output`, `\timing`, `\budget`,
-`\page-size`, `\next`, `\history`, `\mode command`, `\clear`, `\g`, and
-`\quit`. History is memory-only unless `--persist-history` is present.
+`\page-size`, `\next`, `\history`, `\mode`, `\clear`, `\g`, and `\quit`.
+History is memory-only unless `--persist-history` is present.
 
 ## Exit codes
 

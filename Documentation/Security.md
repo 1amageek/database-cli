@@ -20,6 +20,24 @@ using the same canonical routing headers. URL scheme is the only transport
 selector. An unavailable selected transport or endpoint is a typed failure; no
 fallback endpoint is attempted.
 
+## Native server bootstrap
+
+`database serve` creates or reads a server configuration through a private
+child-process pipe. On first launch the server emits a new administrator token;
+the CLI writes the profile and Keychain state before returning a one-byte
+acceptance acknowledgement. Rejection removes the new registry entry.
+
+The raw token is not placed in argv, environment variables, profiles, server
+configuration, history, or diagnostic output. The server registry persists only
+the token identifier, SHA-256 digest, principal, roles, and lifecycle times.
+Digest comparison is constant-time.
+
+Server configuration and registry directories require owner-only mode `0700`;
+files require `0600`. Symbolic-link files and foreign ownership are rejected.
+Non-loopback binding requires TLS, authentication, and complete routing before
+the socket is created. There is no unauthenticated flag or default-database
+fallback.
+
 ## Files
 
 Profile and persistent-history parent directories use mode `0700`; files use

@@ -1,0 +1,71 @@
+#!/usr/bin/env ruby
+
+require "pty"
+require "timeout"
+
+MAXIMUM_TRANSCRIPT_BYTES = 4 * 1024 * 1024
+
+def read_until(reader, transcript, buffer, expected)
+  until buffer.include?(expected)
+    chunk = reader.readpartial(4096)
+    transcript.write(chunk)
+    buffer << chunk
+    if buffer.bytesize > MAXIMUM_TRANSCRIPT_BYTES
+      raise "PTY transcript exceeded #{MAXIMUM_TRANSCRIPT_BYTES} bytes"
+    end
+  end
+end
+
+def terminate_process(process_id)
+  return unless Process.waitpid(process_id, Process::WNOHANG).nil?
+
+  Process.kill("TERM", process_id)
+  50.times do
+    return unless Process.waitpid(process_id, Process::WNOHANG).nil?
+    sleep 0.05
+  end
+  Process.kill("KILL", process_id)
+  Process.waitpid(process_id)
+rescue Errno::ECHILD, Errno::ESRCH
+end
+
+database, transcript_path = ARGV
+if database.nil? || transcript_path.nil?
+  warn "usage: pty-shell-test <database> <transcript>"
+  exit 2
+end
+
+File.open(transcript_path, "wb", 0o600) do |transcript|
+  Timeout.timeout(30) do
+    PTY.spawn(database, "open", "--memory") do |reader, writer, process_id|
+      writer.sync = true
+      buffer = String.new(encoding: Encoding::BINARY)
+      process_status = nil
+      begin
+        read_until(reader, transcript, buffer, "[sql:query]> ")
+        writer.write("\\mode command\n")
+        read_until(reader, transcript, buffer, "[command]> ")
+        writer.write("cap\t --output json\n")
+        read_until(
+          reader,
+          transcript,
+          buffer,
+          '"identifier":"schema.execute","version":"1"'
+        )
+        writer.write("\\quit\n")
+
+        begin
+          loop { transcript.write(reader.readpartial(4096)) }
+        rescue EOFError, Errno::EIO
+        end
+        _, process_status = Process.wait2(process_id)
+      ensure
+        writer.close unless writer.closed?
+        terminate_process(process_id) if process_status.nil?
+      end
+      unless process_status.success?
+        raise "database shell exited with #{process_status.exitstatus}"
+      end
+    end
+  end
+end

@@ -63,6 +63,110 @@ struct RemoteCommandExecutor: Sendable {
                 response,
                 entity: command.positionals[0]
             )
+        case ["schema", "plan"], ["schema", "apply"]:
+            let request = try builder.schemaExecutionRequest(command)
+            if try await startJobIfRequested(
+                command,
+                operation: DatabaseOperations.schemaExecute,
+                request: request,
+                metadata: execution.metadata,
+                renderer: renderer
+            ) { return }
+            try renderer.renderSchemaExecution(
+                try await session.client.execute(
+                    DatabaseOperations.schemaExecute,
+                    request: request,
+                    metadata: execution.metadata
+                )
+            )
+        case ["inspect", "overview"]:
+            try rejectJobOption(command)
+            async let capabilities = session.client.execute(
+                DatabaseOperations.capabilitiesDescribe,
+                request: EmptyOperationPayload(),
+                metadata: execution.metadata
+            )
+            async let schema = session.client.execute(
+                DatabaseOperations.schemaDescribe,
+                request: EmptyOperationPayload(),
+                metadata: execution.metadata
+            )
+            try await renderer.renderInspectionOverview(
+                capabilities: capabilities,
+                schema: schema
+            )
+        case ["inspect", "entities"]:
+            try rejectJobOption(command)
+            let response = try await session.client.execute(
+                DatabaseOperations.schemaDescribe,
+                request: EmptyOperationPayload(),
+                metadata: execution.metadata
+            )
+            try renderer.renderSchema(
+                response,
+                entity: command.positionals.first
+            )
+        case ["inspect", "indexes"]:
+            try rejectJobOption(command)
+            async let schema = session.client.execute(
+                DatabaseOperations.schemaDescribe,
+                request: EmptyOperationPayload(),
+                metadata: execution.metadata
+            )
+            async let status = session.client.execute(
+                DatabaseOperations.maintenanceExecute,
+                request: MaintenanceExecuteOperation.Request(
+                    invocation: .indexStatus(
+                        entity: command.options.value("entity"),
+                        index: nil,
+                        partitions: FieldObject()
+                    ),
+                    continuation: execution.continuation,
+                    budget: execution.budget
+                ),
+                metadata: execution.metadata
+            )
+            try await renderer.renderIndexInspection(
+                schema: schema,
+                status: status,
+                entity: command.options.value("entity")
+            )
+        case ["inspect", "graph"]:
+            try rejectJobOption(command)
+            let response = try await session.client.execute(
+                DatabaseOperations.schemaDescribe,
+                request: EmptyOperationPayload(),
+                metadata: execution.metadata
+            )
+            try renderer.renderGraphInspection(
+                response,
+                entity: command.options.value("entity")
+            )
+        case ["inspect", "jobs"]:
+            try rejectJobOption(command)
+            try renderer.renderAdvertisedJobs(
+                try await session.client.execute(
+                    DatabaseOperations.capabilitiesDescribe,
+                    request: EmptyOperationPayload(),
+                    metadata: execution.metadata
+                )
+            )
+        case ["inspect", "ontology"]:
+            try await execute(
+                ParsedCommand(
+                    path: ["ontology", "describe"],
+                    positionals: command.positionals,
+                    options: command.options
+                )
+            )
+        case ["inspect", "shapes"]:
+            try await execute(
+                ParsedCommand(
+                    path: ["shacl", "describe"],
+                    positionals: command.positionals,
+                    options: command.options
+                )
+            )
         case let path where path.count == 2 && path[0] == "query":
             try await executeQuery(
                 command,
@@ -617,6 +721,16 @@ private extension RemoteCommandExecutor {
     ) async throws {
         let job = try jobIdentity(command)
         switch job.operation.family {
+        case .schemaExecute:
+            try renderer.renderSchemaExecution(
+                try await session.client.jobResult(
+                    for: job,
+                    using: try DatabaseOperations.schemaExecute.resumableJob(
+                        kind: job.operation.kind
+                    ),
+                    metadata: execution.metadata
+                )
+            )
         case .queryExecute:
             try _ = renderer.renderQuery(
                 try await session.client.jobResult(
@@ -731,6 +845,7 @@ private extension RemoteCommandExecutor {
         switch value {
         case .capabilitiesDescribe: "capabilitiesDescribe"
         case .schemaDescribe: "schemaDescribe"
+        case .schemaExecute: "schemaExecute"
         case .queryExecute: "queryExecute"
         case .mutationExecute: "mutationExecute"
         case .graphAlgorithm: "graphAlgorithm"

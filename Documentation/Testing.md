@@ -15,6 +15,7 @@ errors. Dependency checkout bypasses Xcode's shared repository cache so a
 newly published package revision cannot be resolved from stale tag metadata
 without its commit tree. Local path dependencies are rejected unless
 `DATABASE_CLI_ALLOW_LOCAL_DEPENDENCIES=1` is explicitly set for diagnosis.
+The reviewed CLI contract is 48 logical tests.
 
 Executable contracts use:
 
@@ -25,6 +26,7 @@ swift build \
   --only-use-versions-from-resolved-file
 DATABASE_CLI_EXECUTABLE=/path/to/database \
 DATABASE_FDB_EXECUTABLE=/path/to/database-fdb \
+DATABASE_SERVER_EXECUTABLE=/path/to/database-server \
 scripts/process-test-harness
 ```
 
@@ -32,9 +34,17 @@ Use binaries from that exact URL-resolved build. The disabled dependency cache
 prevents stale tag metadata in a shared SwiftPM repository cache from selecting
 a revision whose commit tree has not been fetched.
 
+The process harness sets `DATABASE_CLI_CONFIG_HOME` to a disposable mode-`0700`
+directory so profiles, server configuration, and history never touch the
+developer's normal configuration. It removes the unique Keychain credential in
+both the success path and its cleanup trap.
+
 The process harness verifies stdout/stderr separation, stable exit codes,
-explicit shell launch, history permissions, secret redaction, companion version
-matching, missing-helper failure, and link separation.
+explicit shell launch, controlling-terminal Tab completion, history
+permissions, secret redaction, companion version matching, missing-companion
+failure, standalone memory/file execution, child shutdown, a real
+authenticated `database serve` round trip, negative readiness, disposable
+profile/Keychain cleanup, and link separation.
 
 FoundationDB integration uses an isolated cluster:
 
@@ -51,7 +61,8 @@ Before tagging:
 
 1. verify `Package.swift` contains URL dependencies only;
 2. run the strict Xcode, process, and FoundationDB harnesses;
-3. verify `database` does not link `libfdb_c` and `database-fdb` does;
-4. inspect the `.xcresult` summary and preserved logs;
-5. push the commit, create the release tag, and verify the tag commit equals
+3. verify the CLI and native server versions match;
+4. verify `database` does not link `libfdb_c` and `database-fdb` does;
+5. inspect the `.xcresult` summary and preserved logs;
+6. push the commit, create the release tag, and verify the tag commit equals
    `origin/main`.

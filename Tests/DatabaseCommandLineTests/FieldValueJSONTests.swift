@@ -94,3 +94,63 @@ func enforcesDecodeLimits() {
         )
     }
 }
+
+private let scalarLiteralFixtures: [(String, String)] = [
+    ("string:alice", #"{"$type":"string","value":"alice"}"#),
+    ("bool:true", #"{"$type":"bool","value":true}"#),
+    ("int64:-42", #"{"$type":"int64","value":"-42"}"#),
+    ("uint64:42", #"{"$type":"uint64","value":"42"}"#),
+    ("decimal:12.34", #"{"$type":"decimal","value":"12.34"}"#),
+    ("float32bits:3f800000", #"{"$type":"float32","bits":"3f800000"}"#),
+    ("float64bits:3ff0000000000000", #"{"$type":"float64","bits":"3ff0000000000000"}"#),
+    ("bytes:AAEC_w", #"{"$type":"bytes","value":"AAEC_w"}"#),
+    ("uuid:00000000-0000-0000-0000-000000000001", #"{"$type":"uuid","value":"00000000-0000-0000-0000-000000000001"}"#),
+    ("date:2026-08-08", #"{"$type":"date","year":"2026","month":"8","day":"8"}"#),
+    ("time:12:34:56.000000789", #"{"$type":"time","hour":"12","minute":"34","second":"56","nanoseconds":"789"}"#),
+    ("timestamp:-1.000000002", #"{"$type":"timestamp","seconds":"-1","nanoseconds":"2"}"#),
+]
+
+@Test("Every explicit scalar shorthand maps to one canonical FieldValue", arguments: scalarLiteralFixtures)
+func explicitScalarLiteralMapsToCanonicalValue(
+    _ literal: String,
+    _ canonicalJSON: String
+) throws {
+    let value = try ExplicitScalarLiteralDecoder().decode(literal)
+    #expect(try FieldValueJSONEncoder().encode(value) == canonicalJSON)
+}
+
+@Test("Malformed or inferred scalar shorthand is rejected", arguments: [
+    "42",
+    "bool:yes",
+    "int64:01",
+    "float32bits:7f800000",
+    "bytes:AA==",
+    "date:2026-02-30",
+    "time:12:34:56.1",
+    "timestamp:1.2",
+    "object:{}",
+])
+func rejectsInvalidScalarLiteral(_ literal: String) {
+    #expect(throws: DatabaseCLIError.self) {
+        try ExplicitScalarLiteralDecoder().decode(literal)
+    }
+}
+
+@Test("Repeatable scalar bindings become the canonical parameter model")
+func scalarBindingsBuildCanonicalParameters() throws {
+    let command = try CommandParser().parse([
+        "query", "sql", "SELECT $1, :name",
+        "--parameter", "$1=int64:42",
+        "--parameter", "name=string:alice",
+    ])
+
+    let parameters = try WireRequestBuilder().parameters(command.options)
+
+    #expect(parameters.count == 2)
+    #expect(parameters[0].position == 1)
+    #expect(parameters[0].name == nil)
+    #expect(parameters[0].value == .int64(42))
+    #expect(parameters[1].position == 2)
+    #expect(parameters[1].name == "name")
+    #expect(parameters[1].value == .string("alice"))
+}
