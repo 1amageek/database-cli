@@ -22,8 +22,22 @@ private let fdbCommandFixtures: [FDBCommandFixture] = [
     ),
     .init(arguments: ["cluster", "stop"], path: ["cluster", "stop"]),
     .init(arguments: ["cluster", "status"], path: ["cluster", "status"]),
-    .init(arguments: ["catalog", "list"], path: ["catalog", "list"]),
-    .init(arguments: ["catalog", "show", "Person"], path: ["catalog", "show"]),
+    .init(
+        arguments: [
+            "catalog", "list",
+            "--control-namespace", "database",
+            "--control-namespace", "main",
+        ],
+        path: ["catalog", "list"]
+    ),
+    .init(
+        arguments: [
+            "catalog", "show", "Person",
+            "--control-namespace", "database",
+            "--control-namespace", "main",
+        ],
+        path: ["catalog", "show"]
+    ),
     .init(arguments: ["raw", "get", "--key-hex", "00"], path: ["raw", "get"]),
     .init(arguments: ["raw", "range", "--key-utf8", "a", "--max-total-bytes", "10"], path: ["raw", "range"]),
 ]
@@ -70,6 +84,18 @@ func rejectsAmbiguousOrWriteOptions() {
     #expect(throws: FDBCLIError.self) {
         try FDBCommandParser().parse(["raw", "set", "--key-hex", "00"])
     }
+    #expect(throws: FDBCLIError.self) {
+        try FDBCommandParser().parse(["catalog", "list"])
+    }
+    let repeatedNamespace = try? FDBCommandParser().parse([
+            "catalog", "list",
+            "--control-namespace", "database",
+            "--control-namespace", "main",
+        ])
+    #expect(
+        repeatedNamespace?.optionValues("control-namespace")
+            == ["database", "main"]
+    )
 }
 
 @Test("Cluster initialization writes a private explicit cluster file")

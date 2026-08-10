@@ -1,5 +1,6 @@
 import DatabaseCommandLine
 import Foundation
+import StorageKit
 
 public struct DatabaseFDBApplication: Sendable {
     private let output = FDBOutput()
@@ -119,13 +120,21 @@ private extension DatabaseFDBApplication {
             ) { engine in
                 switch command.path {
                 case ["catalog", "list"]:
+                    let root = try await engine.resolveExistingNamespace(
+                        path: command.optionValues("control-namespace")
+                    )
                     try await FDBCatalogInspector(output: output).list(
-                        engine: engine
+                        engine: engine,
+                        root: root
                     )
                 case ["catalog", "show"]:
+                    let root = try await engine.resolveExistingNamespace(
+                        path: command.optionValues("control-namespace")
+                    )
                     try await FDBCatalogInspector(output: output).show(
                         name: command.positionals[0],
-                        engine: engine
+                        engine: engine,
+                        root: root
                     )
                 case ["raw", "get"]:
                     try await FDBRawInspector(output: output).get(

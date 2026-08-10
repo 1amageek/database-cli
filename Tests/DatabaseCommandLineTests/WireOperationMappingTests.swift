@@ -8,16 +8,24 @@ import Testing
 @testable import DatabaseCommandLine
 
 private struct OperationFixture: Sendable {
+    enum Target: Sendable {
+        case database
+        case base(String)
+        case composition(String)
+    }
+
     let arguments: [String]
     let operation: DatabaseOperationIdentifier
+    let target: Target
 }
 
 private let operationFixtures: [OperationFixture] = [
-    .init(arguments: ["capabilities"], operation: .capabilitiesDescribe),
-    .init(arguments: ["schema", "list"], operation: .schemaDescribe),
+    .init(arguments: ["capabilities"], operation: .capabilitiesDescribe, target: .database),
+    .init(arguments: ["schema", "list"], operation: .schemaDescribe, target: .database),
     .init(
         arguments: ["schema", "plan", schemaJSON],
-        operation: .schemaExecute
+        operation: .schemaExecute,
+        target: .database
     ),
     .init(
         arguments: [
@@ -25,37 +33,46 @@ private let operationFixtures: [OperationFixture] = [
             "--expected-fingerprint", emptyFingerprint,
             "--idempotency-key", "schema-1",
         ],
-        operation: .schemaExecute
+        operation: .schemaExecute,
+        target: .database
     ),
-    .init(arguments: ["inspect", "entities"], operation: .schemaDescribe),
-    .init(arguments: ["inspect", "graph"], operation: .schemaDescribe),
-    .init(arguments: ["inspect", "jobs"], operation: .capabilitiesDescribe),
-    .init(arguments: ["inspect", "ontology", "world"], operation: .ontologyExecute),
-    .init(arguments: ["inspect", "shapes", "urn:shapes"], operation: .shaclExecute),
-    .init(arguments: ["query", "sql", "SELECT 1"], operation: .queryExecute),
-    .init(arguments: ["mutate", "sparql", "CLEAR DEFAULT"], operation: .mutationExecute),
-    .init(arguments: ["graph", "page-rank", "--index", "social"], operation: .graphAlgorithm),
-    .init(arguments: ["ontology", "describe", "world"], operation: .ontologyExecute),
-    .init(arguments: ["shacl", "describe", "urn:shapes"], operation: .shaclExecute),
+    .init(arguments: ["base", "describe", "company-a"], operation: .baseExecute, target: .base("company-a")),
+    .init(arguments: ["composition", "describe", "shared"], operation: .compositionExecute, target: .composition("shared")),
+    .init(arguments: ["grant", "effective", "--base", "company-a", "--principal", "alice"], operation: .grantExecute, target: .base("company-a")),
+    .init(arguments: ["inspect", "entities"], operation: .schemaDescribe, target: .database),
+    .init(arguments: ["inspect", "graph"], operation: .schemaDescribe, target: .database),
+    .init(arguments: ["inspect", "jobs"], operation: .capabilitiesDescribe, target: .database),
+    .init(arguments: ["inspect", "ontology", "world", "--base", "company-a"], operation: .ontologyExecute, target: .base("company-a")),
+    .init(arguments: ["inspect", "shapes", "urn:shapes", "--base", "company-a"], operation: .shaclExecute, target: .base("company-a")),
+    .init(arguments: ["query", "sql", "SELECT 1", "--base", "company-a"], operation: .queryExecute, target: .base("company-a")),
+    .init(arguments: ["mutate", "sparql", "CLEAR DEFAULT", "--base", "company-a"], operation: .mutationExecute, target: .base("company-a")),
+    .init(arguments: ["graph", "page-rank", "--index", "social", "--base", "company-a"], operation: .graphAlgorithm, target: .base("company-a")),
+    .init(arguments: ["ontology", "describe", "world", "--base", "company-a"], operation: .ontologyExecute, target: .base("company-a")),
+    .init(arguments: ["shacl", "describe", "urn:shapes", "--base", "company-a"], operation: .shaclExecute, target: .base("company-a")),
     .init(
         arguments: [
             "command", "run", "system.inspect",
             #"{"$type":"object","value":{}}"#,
+            "--base", "company-a",
         ],
-        operation: .commandExecute
+        operation: .commandExecute,
+        target: .base("company-a")
     ),
-    .init(arguments: ["maintenance", "compact"], operation: .maintenanceExecute),
+    .init(arguments: ["maintenance", "compact", "--base", "company-a"], operation: .maintenanceExecute, target: .base("company-a")),
     .init(
-        arguments: ["job", "status", jobID, "queryExecute", "query"],
-        operation: .jobStatus
-    ),
-    .init(
-        arguments: ["job", "result", jobID, "queryExecute", "query"],
-        operation: .jobResult
+        arguments: ["job", "status", jobID, "queryExecute", "query", "--base", "company-a"],
+        operation: .jobStatus,
+        target: .base("company-a")
     ),
     .init(
-        arguments: ["job", "cancel", jobID, "queryExecute", "query"],
-        operation: .jobCancel
+        arguments: ["job", "result", jobID, "queryExecute", "query", "--base", "company-a"],
+        operation: .jobResult,
+        target: .base("company-a")
+    ),
+    .init(
+        arguments: ["job", "cancel", jobID, "queryExecute", "query", "--base", "company-a"],
+        operation: .jobCancel,
+        target: .base("company-a")
     ),
 ]
 
@@ -96,6 +113,106 @@ func schemaExecutionRequestContract() throws {
     #expect(idempotencyKey == "schema-1")
 }
 
+@Test("Base creation preserves placement, revision, idempotency, and canonical initial Grants")
+func baseCreationRequestContract() throws {
+    let command = try CommandParser().parse([
+        "base", "create", "company-a",
+        "--placement", "primary",
+        "--initial-grant", "role:operator=read,administer",
+        "--initial-grant", "principal:alice=read,write",
+        "--expected-revision", "0",
+        "--idempotency-key", "base-create-1",
+    ])
+    let builder = WireRequestBuilder()
+    let request = try builder.baseExecutionRequest(command)
+
+    guard case .create(
+        let baseID,
+        let placementID,
+        let grants,
+        let revision,
+        let key
+    ) = request.invocation else {
+        Issue.record("Expected Base creation")
+        return
+    }
+    #expect(try builder.operationTarget(command) == .database)
+    #expect(baseID == (try Base.ID("company-a")))
+    #expect(placementID == (try Base.Placement.ID("primary")))
+    #expect(revision == 0)
+    #expect(key == "base-create-1")
+    #expect(grants.map(\.subject) == [
+        .principal("alice"),
+        .principalRole("operator"),
+    ])
+    #expect(grants[0].access == [.read, .write])
+    #expect(grants[1].access == [.read, .administer])
+}
+
+@Test("Composition members are canonical and duplicate members are rejected")
+func compositionRequestContract() throws {
+    let parser = CommandParser()
+    let command = try parser.parse([
+        "composition", "create", "shared",
+        "--base", "company-b",
+        "--base", "company-a",
+        "--expected-revision", "0",
+        "--idempotency-key", "composition-create-1",
+    ])
+    let builder = WireRequestBuilder()
+    let request = try builder.compositionExecutionRequest(command)
+    guard case .create(let composition, let revision, let key) = request.invocation else {
+        Issue.record("Expected Composition creation")
+        return
+    }
+    #expect(try builder.operationTarget(command) == .database)
+    #expect(composition.id == (try Base.Composition.ID("shared")))
+    #expect(composition.bases == [
+        try Base.ID("company-a"),
+        try Base.ID("company-b"),
+    ])
+    #expect(revision == 0)
+    #expect(key == "composition-create-1")
+
+    let duplicate = try parser.parse([
+        "composition", "create", "shared",
+        "--base", "company-a",
+        "--base", "company-a",
+        "--expected-revision", "0",
+        "--idempotency-key", "composition-create-2",
+    ])
+    #expect(throws: DatabaseCLIError.self) {
+        try builder.compositionExecutionRequest(duplicate)
+    }
+}
+
+@Test("Grant mutation binds independent access bits to its exact target")
+func grantRequestContract() throws {
+    let command = try CommandParser().parse([
+        "grant", "add",
+        "--base", "company-a",
+        "--role", "analyst",
+        "--access", "read,write",
+        "--expected-revision", "7",
+        "--idempotency-key", "grant-add-1",
+    ])
+    let builder = WireRequestBuilder()
+    let request = try builder.grantExecutionRequest(command)
+    guard case .grant(let grant, let revision, let key) = request.invocation else {
+        Issue.record("Expected persisted Grant mutation")
+        return
+    }
+    #expect(
+        try builder.operationTarget(command)
+            == .base(try Base.ID("company-a"))
+    )
+    #expect(grant.subject == .principalRole("analyst"))
+    #expect(grant.resource == .base(try Base.ID("company-a")))
+    #expect(grant.access == [.read, .write])
+    #expect(revision == 7)
+    #expect(key == "grant-add-1")
+}
+
 @Test("Open schema applies the fingerprint returned by its immediately preceding plan")
 func openSchemaUsesPlanFingerprint() async throws {
     let probe = OpenSchemaProbeTransport()
@@ -132,6 +249,7 @@ private func mapsDirectWireOperation(_ fixture: OperationFixture) async throws {
         ).execute(command)
     }
     #expect(probe.operations == [fixture.operation])
+    #expect(try probe.targets == [databaseTarget(fixture.target)])
     await session.shutdown()
 }
 
@@ -147,6 +265,7 @@ func mapsJobStartAfterCapabilityAdvertisement() async throws {
     )
     let command = try CommandParser().parse([
         "query", "sql", "SELECT 1", "--as-job", "query",
+        "--base", "company-a",
     ])
 
     await #expect(throws: DatabaseClientError.self) {
@@ -156,6 +275,10 @@ func mapsJobStartAfterCapabilityAdvertisement() async throws {
         ).execute(command)
     }
     #expect(probe.operations == [.capabilitiesDescribe, .jobStart])
+    #expect(
+        probe.targets
+            == [.database, .base(try Base.ID("company-a"))]
+    )
     await session.shutdown()
 }
 
@@ -186,7 +309,9 @@ func inspectIndexesComposesReadOnlyOperations() async throws {
     let session = RemoteSession(
         transport: AnyDatabaseTransport(probe) { _ in }
     )
-    let command = try CommandParser().parse(["inspect", "indexes"])
+    let command = try CommandParser().parse([
+        "inspect", "indexes", "--base", "company-a",
+    ])
 
     await #expect(throws: DatabaseClientError.self) {
         try await RemoteCommandExecutor(
@@ -198,12 +323,17 @@ func inspectIndexesComposesReadOnlyOperations() async throws {
         Set(probe.operations)
             == Set([.schemaDescribe, .maintenanceExecute])
     )
+    #expect(
+        Set(probe.targets)
+            == Set([.database, .base(try Base.ID("company-a"))])
+    )
     await session.shutdown()
 }
 
 private final class OperationProbeTransport: DatabaseTransport, Sendable {
     private struct State: Sendable {
         var operations: [DatabaseOperationIdentifier] = []
+        var targets: [DatabaseOperationTarget] = []
     }
 
     private let state = Mutex(State())
@@ -217,17 +347,24 @@ private final class OperationProbeTransport: DatabaseTransport, Sendable {
         state.withLock { $0.operations }
     }
 
+    var targets: [DatabaseOperationTarget] {
+        state.withLock { $0.targets }
+    }
+
     func send(
         _ request: ByteString
     ) async throws(DatabaseTransportError) -> ByteString {
         do {
-            let header = try DatabaseWireDecoder().decodeRequestHeader(request)
-            state.withLock { $0.operations.append(header.operation) }
-            if header.operation == .capabilitiesDescribe,
+            let envelope = try DatabaseWireDecoder().decodeRequestEnvelope(request)
+            state.withLock {
+                $0.operations.append(envelope.operation)
+                $0.targets.append(envelope.target)
+            }
+            if envelope.operation == .capabilitiesDescribe,
                let advertisedJob {
                 return try DatabaseWireEncoder().encodeResponse(
                     DatabaseOperations.capabilitiesDescribe,
-                    requestID: header.requestID,
+                    requestID: envelope.requestID,
                     response: CapabilitiesDescribeOperation.Response(
                         runtimeVersion: "operation-probe",
                         features: [],
@@ -236,8 +373,8 @@ private final class OperationProbeTransport: DatabaseTransport, Sendable {
                 )
             }
             return try DatabaseWireEncoder().encodeFailure(
-                requestID: header.requestID,
-                operation: header.operation,
+                requestID: envelope.requestID,
+                operation: envelope.operation,
                 error: RemoteOperationError(
                     category: .internalFailure,
                     code: "OPERATION_PROBE",
@@ -248,6 +385,19 @@ private final class OperationProbeTransport: DatabaseTransport, Sendable {
         } catch {
             throw .invalidResponse(String(describing: error))
         }
+    }
+}
+
+private func databaseTarget(
+    _ target: OperationFixture.Target
+) throws -> DatabaseOperationTarget {
+    switch target {
+    case .database:
+        return .database
+    case .base(let id):
+        return .base(try Base.ID(id))
+    case .composition(let id):
+        return .composition(try Base.Composition.ID(id))
     }
 }
 

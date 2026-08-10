@@ -75,17 +75,47 @@ public struct ResultRenderer: Sendable {
         jsonFraming: JSONPageFraming = .single
     ) throws -> RenderedPage {
         switch response {
-        case .boolean(let value):
+        case .boolean(let result):
             try elementQuota?.reserveOne()
             guard format != .csv && format != .nquads else {
                 throw DatabaseCLIError(.input, "Boolean results do not support \(format.rawValue) output")
             }
-            let text = format == .json
-                ? "{\"$type\":\"bool\",\"value\":\(value)}\n"
-                : "\(value)\n"
+            let provenance = try result.provenance.map { provenance in
+                var iterator = provenance.makeOriginIterator()
+                guard let origin = try iterator.next(),
+                      try iterator.next() == nil else {
+                    throw DatabaseCLIError(
+                        .internalFailure,
+                        "Boolean result provenance is inconsistent"
+                    )
+                }
+                return provenanceNode(provenance, origin: origin)
+            }
+            let text: String
+            if format == .table, let provenance {
+                text = "value\t$provenance\n\(result.value)\t\(tableJSON(provenance))\n"
+            } else if format == .json || format == .jsonl {
+                var fields: [(key: String, value: StrictJSONValue)] = [
+                    ("$type", .string("bool")),
+                    ("value", .bool(result.value)),
+                ]
+                if let provenance {
+                    fields.append(("$provenance", provenance))
+                }
+                text = StrictJSONWriter.encode(.object(fields)) + "\n"
+            } else {
+                text = "\(result.value)\n"
+            }
+            var byteCount = UInt64(try output.result(text))
+            try renderPageMetadata(
+                continuation: nil,
+                consistency: result.consistency,
+                format: format,
+                bytes: &byteCount
+            )
             return RenderedPage(
                 elementCount: 1,
-                byteCount: UInt64(try output.result(text)),
+                byteCount: byteCount,
                 continuation: nil
             )
         case .rows(let page):
@@ -112,36 +142,61 @@ public struct ResultRenderer: Sendable {
             throw DatabaseCLIError(.input, "N-Quads output requires an RDF result")
         }
         var iterator = page.makeRowIterator()
+        var originIterator = page.provenance?.makeOriginIterator()
         var count: UInt64 = 0
         var bytes: UInt64 = 0
         if format == .json, jsonFraming.opensCollection {
             bytes += UInt64(try output.result("["))
         } else if format == .table {
+            var columns = page.columns.map(\.name)
+            if page.provenance != nil { columns.append("$provenance") }
             bytes += UInt64(
                 try output.result(
-                    page.columns.map(\.name).joined(separator: "\t") + "\n"
+                    columns.joined(separator: "\t") + "\n"
                 )
             )
         } else if format == .csv {
+            var columns = page.columns.map { csvEscape($0.name) }
+            if page.provenance != nil { columns.append("$provenance") }
             bytes += UInt64(
                 try output.result(
-                    page.columns.map { csvEscape($0.name) }.joined(separator: ",") + "\n"
+                    columns.joined(separator: ",") + "\n"
                 )
             )
         }
         while let row = try iterator.next() {
             try elementQuota?.reserveOne()
+            let provenanceNode = try rowProvenanceNode(
+                page.provenance,
+                iterator: &originIterator
+            )
             let encoded: String
             switch format {
             case .jsonl:
-                encoded = try rowJSON(row, columns: page.columns) + "\n"
+                encoded = try rowJSON(
+                    row,
+                    columns: page.columns,
+                    provenance: provenanceNode
+                ) + "\n"
             case .json:
                 encoded = (count == 0 && !jsonFraming.hasPriorElements ? "" : ",")
-                    + (try rowJSON(row, columns: page.columns))
+                    + (try rowJSON(
+                        row,
+                        columns: page.columns,
+                        provenance: provenanceNode
+                    ))
             case .table:
-                encoded = try row.values.map(tableValue).joined(separator: "\t") + "\n"
+                var values = try row.values.map(tableValue)
+                if let provenanceNode {
+                    values.append(tableJSON(provenanceNode))
+                }
+                encoded = values.joined(separator: "\t") + "\n"
             case .csv:
-                encoded = try row.values.map(csvValue).joined(separator: ",") + "\n"
+                var values = try row.values.map(csvValue)
+                if let provenanceNode {
+                    values.append(csvEscape(StrictJSONWriter.encode(provenanceNode)))
+                }
+                encoded = values.joined(separator: ",") + "\n"
             case .nquads:
                 throw DatabaseCLIError(
                     .internalFailure,
@@ -151,12 +206,13 @@ public struct ResultRenderer: Sendable {
             bytes += UInt64(try output.result(encoded))
             count += 1
         }
+        try requireOriginsExhausted(&originIterator)
         if format == .json, jsonFraming.closesCollection {
             bytes += UInt64(try output.result("]\n"))
         }
         try renderPageMetadata(
             continuation: page.continuation,
-            snapshotVersion: page.snapshotVersion.map(String.init),
+            consistency: page.consistency,
             format: format,
             bytes: &bytes
         )
@@ -178,8 +234,15 @@ public struct ResultRenderer: Sendable {
                 "RDF results support only nquads, jsonl, or json output"
             )
         }
+        guard format != .nquads || page.provenance == nil else {
+            throw DatabaseCLIError(
+                .input,
+                "N-Quads output cannot preserve Composition provenance; use jsonl or json"
+            )
+        }
         let nquads = NQuadsEncoder()
         var iterator = page.makeQuadIterator()
+        var originIterator = page.provenance?.makeOriginIterator()
         var count: UInt64 = 0
         var bytes: UInt64 = 0
         if format == .json, jsonFraming.opensCollection {
@@ -187,11 +250,15 @@ public struct ResultRenderer: Sendable {
         }
         while let quad = try iterator.next() {
             try elementQuota?.reserveOne()
+            let provenanceNode = try rowProvenanceNode(
+                page.provenance,
+                iterator: &originIterator
+            )
             let encoded: String
             if format == .nquads {
                 encoded = try nquads.format(quad) + "\n"
             } else {
-                let node = StrictJSONValue.object([
+                var fields: [(key: String, value: StrictJSONValue)] = [
                     (
                         "subject",
                         try fieldEncoder.node(.rdfTerm(quad.subject.term))
@@ -207,8 +274,11 @@ public struct ResultRenderer: Sendable {
                             try fieldEncoder.node(.rdfTerm($0.term))
                         } ?? .null
                     ),
-                ])
-                let json = StrictJSONWriter.encode(node)
+                ]
+                if let provenanceNode {
+                    fields.append(("$provenance", provenanceNode))
+                }
+                let json = StrictJSONWriter.encode(.object(fields))
                 encoded = format == .json
                     ? (count == 0 && !jsonFraming.hasPriorElements ? "" : ",") + json
                     : json + "\n"
@@ -216,12 +286,13 @@ public struct ResultRenderer: Sendable {
             bytes += UInt64(try output.result(encoded))
             count += 1
         }
+        try requireOriginsExhausted(&originIterator)
         if format == .json, jsonFraming.closesCollection {
             bytes += UInt64(try output.result("]\n"))
         }
         try renderPageMetadata(
             continuation: page.continuation,
-            snapshotVersion: page.snapshotVersion.map(String.init),
+            consistency: page.consistency,
             format: format,
             bytes: &bytes
         )
@@ -238,7 +309,8 @@ public struct ResultRenderer: Sendable {
 
     private func rowJSON(
         _ row: QueryRow,
-        columns: [QueryColumn]
+        columns: [QueryColumn],
+        provenance: StrictJSONValue?
     ) throws -> String {
         var fields: [(key: String, value: StrictJSONValue)] = []
         fields.reserveCapacity(columns.count + 2)
@@ -254,7 +326,69 @@ public struct ResultRenderer: Sendable {
                 try fieldEncoder.node(.object(row.annotations))
             ))
         }
+        if let provenance {
+            fields.append(("$provenance", provenance))
+        }
         return StrictJSONWriter.encode(.object(fields))
+    }
+
+    private func rowProvenanceNode(
+        _ provenance: CompositionPageProvenance?,
+        iterator: inout CompositionOriginIterator?
+    ) throws -> StrictJSONValue? {
+        guard let provenance else { return nil }
+        guard let origin = try iterator?.next() else {
+            throw DatabaseCLIError(
+                .internalFailure,
+                "Composition provenance ended before its result page"
+            )
+        }
+        return provenanceNode(provenance, origin: origin)
+    }
+
+    private func requireOriginsExhausted(
+        _ iterator: inout CompositionOriginIterator?
+    ) throws {
+        guard try iterator?.next() == nil else {
+            throw DatabaseCLIError(
+                .internalFailure,
+                "Composition provenance exceeds its result page"
+            )
+        }
+    }
+
+    private func provenanceNode(
+        _ provenance: CompositionPageProvenance,
+        origin: CompositionOrigin
+    ) -> StrictJSONValue {
+        .object([
+            ("composition", .string(provenance.compositionID.value)),
+            ("generation", .string(String(provenance.generation))),
+            ("origin", originNode(origin)),
+        ])
+    }
+
+    private func originNode(_ origin: CompositionOrigin) -> StrictJSONValue {
+        switch origin {
+        case .source(let baseID):
+            return .object([
+                ("type", .string("source")),
+                ("base", .string(baseID.value)),
+            ])
+        case .derived(let contributors):
+            return .object([
+                ("type", .string("derived")),
+                ("contributors", .array(
+                    contributors.map { .string($0.value) }
+                )),
+            ])
+        }
+    }
+
+    private func tableJSON(_ node: StrictJSONValue) -> String {
+        StrictJSONWriter.encode(node)
+            .replacingOccurrences(of: "\t", with: "\\t")
+            .replacingOccurrences(of: "\n", with: "\\n")
     }
 
     private func tableValue(_ value: FieldValue) throws -> String {
@@ -282,15 +416,14 @@ public struct ResultRenderer: Sendable {
 
     private func renderPageMetadata(
         continuation: ByteString?,
-        snapshotVersion: String?,
+        consistency: DatabaseReadConsistency,
         format: OutputFormat,
         bytes: inout UInt64
     ) throws {
-        guard continuation != nil || snapshotVersion != nil else { return }
         let metadata = StrictJSONWriter.encode(
             .object([
                 ("$continuation", continuation.map { .string(Base64URL.encode($0)) } ?? .null),
-                ("$snapshotVersion", snapshotVersion.map(StrictJSONValue.string) ?? .null),
+                ("$consistency", consistencyNode(consistency)),
             ])
         )
         if format == .jsonl {
@@ -298,6 +431,43 @@ public struct ResultRenderer: Sendable {
         } else {
             output.diagnostic(metadata + "\n")
         }
+    }
+
+    private func consistencyNode(
+        _ consistency: DatabaseReadConsistency
+    ) -> StrictJSONValue {
+        switch consistency {
+        case .transactional(let readPoint):
+            return .object([
+                ("type", .string("transactional")),
+                ("readPoints", .array([readPointNode(readPoint)])),
+            ])
+        case .federated(let readPoints):
+            return .object([
+                ("type", .string("federated")),
+                ("readPoints", .array(readPoints.map(readPointNode))),
+            ])
+        }
+    }
+
+    private func readPointNode(_ readPoint: DomainReadPoint) -> StrictJSONValue {
+        let position: StrictJSONValue
+        switch readPoint.position {
+        case .version(let version):
+            position = .object([
+                ("type", .string("version")),
+                ("value", .string(String(version))),
+            ])
+        case .opaque(let bytes):
+            position = .object([
+                ("type", .string("opaque")),
+                ("value", .string(Base64URL.encode(bytes))),
+            ])
+        }
+        return .object([
+            ("domain", .string(readPoint.domainID)),
+            ("position", position),
+        ])
     }
 
 }

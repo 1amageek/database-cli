@@ -140,6 +140,7 @@ func rejectsInvalidScalarLiteral(_ literal: String) {
 func scalarBindingsBuildCanonicalParameters() throws {
     let command = try CommandParser().parse([
         "query", "sql", "SELECT $1, :name",
+        "--base", "company-a",
         "--parameter", "$1=int64:42",
         "--parameter", "name=string:alice",
     ])

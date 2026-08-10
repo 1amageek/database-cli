@@ -29,49 +29,69 @@ private let commandFixtures: [CommandFixture] = [
         ],
         path: ["schema", "apply"]
     ),
-    .init(arguments: ["query", "sql", "SELECT 1"], path: ["query", "sql"]),
-    .init(arguments: ["query", "sparql", "SELECT * WHERE {}"], path: ["query", "sparql"]),
-    .init(arguments: ["mutate", "sql", "DELETE FROM Person"], path: ["mutate", "sql"]),
-    .init(arguments: ["mutate", "sparql", "CLEAR DEFAULT"], path: ["mutate", "sparql"]),
-    .init(arguments: ["entity", "insert", "Person", idValue, objectValue], path: ["entity", "insert"]),
-    .init(arguments: ["entity", "update", "Person", idValue, objectValue], path: ["entity", "update"]),
-    .init(arguments: ["entity", "upsert", "Person", idValue, objectValue], path: ["entity", "upsert"]),
-    .init(arguments: ["entity", "delete", "Person", idValue], path: ["entity", "delete"]),
-    .init(arguments: ["entity", "apply", "[]"], path: ["entity", "apply"]),
-    .init(arguments: ["graph", "shortest-path", "--index", "graph"], path: ["graph", "shortest-path"]),
-    .init(arguments: ["graph", "weighted-shortest-path", "--index", "graph"], path: ["graph", "weighted-shortest-path"]),
-    .init(arguments: ["graph", "page-rank", "--index", "graph"], path: ["graph", "page-rank"]),
-    .init(arguments: ["graph", "community", "--index", "graph"], path: ["graph", "community"]),
-    .init(arguments: ["graph", "cycles", "--index", "graph"], path: ["graph", "cycles"]),
-    .init(arguments: ["graph", "strongly-connected-components", "--index", "graph"], path: ["graph", "strongly-connected-components"]),
-    .init(arguments: ["graph", "topological-sort", "--index", "graph"], path: ["graph", "topological-sort"]),
-    .init(arguments: ["ontology", "describe", "world"], path: ["ontology", "describe"]),
-    .init(arguments: ["ontology", "upsert", objectValue], path: ["ontology", "upsert"]),
-    .init(arguments: ["ontology", "delete", "world"], path: ["ontology", "delete"]),
-    .init(arguments: ["ontology", "reason", "world"], path: ["ontology", "reason"]),
-    .init(arguments: ["ontology", "hierarchy", "world", "urn:Class"], path: ["ontology", "hierarchy"]),
-    .init(arguments: ["ontology", "validate-schema", "world"], path: ["ontology", "validate-schema"]),
-    .init(arguments: ["shacl", "describe", "urn:shapes"], path: ["shacl", "describe"]),
-    .init(arguments: ["shacl", "upsert", "urn:shapes", "<urn:s> <urn:p> <urn:o> ."], path: ["shacl", "upsert"]),
-    .init(arguments: ["shacl", "delete", "urn:shapes"], path: ["shacl", "delete"]),
-    .init(arguments: ["shacl", "validate", "urn:shapes", "--entity", "Person", "--index", "byName"], path: ["shacl", "validate"]),
-    .init(arguments: ["command", "run", "system.inspect", objectValue], path: ["command", "run"]),
-    .init(arguments: ["migration", "status"], path: ["migration", "status"]),
-    .init(arguments: ["migration", "run"], path: ["migration", "run"]),
-    .init(arguments: ["index", "status"], path: ["index", "status"]),
-    .init(arguments: ["index", "rebuild", "Person", "byName"], path: ["index", "rebuild"]),
-    .init(arguments: ["maintenance", "compact"], path: ["maintenance", "compact"]),
-    .init(arguments: ["job", "status", uuid, "queryExecute", "query"], path: ["job", "status"]),
-    .init(arguments: ["job", "wait", uuid, "queryExecute", "query"], path: ["job", "wait"]),
-    .init(arguments: ["job", "result", uuid, "queryExecute", "query"], path: ["job", "result"]),
-    .init(arguments: ["job", "cancel", uuid, "queryExecute", "query"], path: ["job", "cancel"]),
+    .init(arguments: ["base", "placements"], path: ["base", "placements"]),
+    .init(arguments: ["base", "list"], path: ["base", "list"]),
+    .init(arguments: ["base", "describe", baseID], path: ["base", "describe"]),
+    .init(arguments: ["base", "create", baseID, "--placement", "default", "--initial-grant", initialGrant, "--expected-revision", "0", "--idempotency-key", "base-create"], path: ["base", "create"]),
+    .init(arguments: ["base", "retire", baseID, "--expected-revision", "1", "--idempotency-key", "base-retire"], path: ["base", "retire"]),
+    .init(arguments: ["base", "activate", baseID, "--expected-revision", "2", "--idempotency-key", "base-activate"], path: ["base", "activate"]),
+    .init(arguments: ["base", "delete", baseID, "--expected-revision", "3", "--idempotency-key", "base-delete"], path: ["base", "delete"]),
+    .init(arguments: ["base", "placement", "plan", baseID, "--destination", "archive", "--expected-revision", "4"], path: ["base", "placement", "plan"]),
+    .init(arguments: ["base", "placement", "apply", baseID, "--destination", "archive", "--expected-revision", "4", "--idempotency-key", "base-move"], path: ["base", "placement", "apply"]),
+    .init(arguments: ["base", "legacy-migration", "plan", baseID, "--placement", "default", "--initial-grant", initialGrant], path: ["base", "legacy-migration", "plan"]),
+    .init(arguments: ["base", "legacy-migration", "apply", baseID, "--placement", "default", "--initial-grant", initialGrant, "--expected-layout-fingerprint", emptyFingerprint, "--expected-revision", "0", "--idempotency-key", "legacy-migrate"], path: ["base", "legacy-migration", "apply"]),
+    .init(arguments: ["composition", "list"], path: ["composition", "list"]),
+    .init(arguments: ["composition", "describe", compositionID], path: ["composition", "describe"]),
+    .init(arguments: ["composition", "create", compositionID, "--base", baseID, "--expected-revision", "0", "--idempotency-key", "composition-create"], path: ["composition", "create"]),
+    .init(arguments: ["composition", "replace", compositionID, "--base", baseID, "--expected-revision", "1", "--idempotency-key", "composition-replace"], path: ["composition", "replace"]),
+    .init(arguments: ["composition", "delete", compositionID, "--expected-revision", "2", "--idempotency-key", "composition-delete"], path: ["composition", "delete"]),
+    .init(arguments: ["grant", "direct", "--database-target"], path: ["grant", "direct"]),
+    .init(arguments: ["grant", "effective", "--base", baseID, "--principal", "alice"], path: ["grant", "effective"]),
+    .init(arguments: ["grant", "add", "--base", baseID, "--principal", "alice", "--access", "read,write", "--expected-revision", "0", "--idempotency-key", "grant-add"], path: ["grant", "add"]),
+    .init(arguments: ["grant", "revoke", "--base", baseID, "--principal", "alice", "--access", "write", "--expected-revision", "1", "--idempotency-key", "grant-revoke"], path: ["grant", "revoke"]),
+    .init(arguments: ["query", "sql", "SELECT 1", "--base", baseID], path: ["query", "sql"]),
+    .init(arguments: ["query", "sparql", "SELECT * WHERE {}", "--composition", compositionID], path: ["query", "sparql"]),
+    .init(arguments: ["mutate", "sql", "DELETE FROM Person", "--base", baseID], path: ["mutate", "sql"]),
+    .init(arguments: ["mutate", "sparql", "CLEAR DEFAULT", "--base", baseID], path: ["mutate", "sparql"]),
+    .init(arguments: ["entity", "insert", "Person", idValue, objectValue, "--base", baseID], path: ["entity", "insert"]),
+    .init(arguments: ["entity", "update", "Person", idValue, objectValue, "--base", baseID], path: ["entity", "update"]),
+    .init(arguments: ["entity", "upsert", "Person", idValue, objectValue, "--base", baseID], path: ["entity", "upsert"]),
+    .init(arguments: ["entity", "delete", "Person", idValue, "--base", baseID], path: ["entity", "delete"]),
+    .init(arguments: ["entity", "apply", "[]", "--base", baseID], path: ["entity", "apply"]),
+    .init(arguments: ["graph", "shortest-path", "--index", "graph", "--source", stringValue, "--target", stringValue, "--base", baseID], path: ["graph", "shortest-path"]),
+    .init(arguments: ["graph", "weighted-shortest-path", "--index", "graph", "--source", stringValue, "--target", stringValue, "--weight-property", "cost", "--base", baseID], path: ["graph", "weighted-shortest-path"]),
+    .init(arguments: ["graph", "page-rank", "--index", "graph", "--base", baseID], path: ["graph", "page-rank"]),
+    .init(arguments: ["graph", "community", "--index", "graph", "--base", baseID], path: ["graph", "community"]),
+    .init(arguments: ["graph", "cycles", "--index", "graph", "--base", baseID], path: ["graph", "cycles"]),
+    .init(arguments: ["graph", "strongly-connected-components", "--index", "graph", "--base", baseID], path: ["graph", "strongly-connected-components"]),
+    .init(arguments: ["graph", "topological-sort", "--index", "graph", "--base", baseID], path: ["graph", "topological-sort"]),
+    .init(arguments: ["ontology", "describe", "world", "--base", baseID], path: ["ontology", "describe"]),
+    .init(arguments: ["ontology", "upsert", objectValue, "--base", baseID], path: ["ontology", "upsert"]),
+    .init(arguments: ["ontology", "delete", "world", "--base", baseID], path: ["ontology", "delete"]),
+    .init(arguments: ["ontology", "reason", "world", "--base", baseID], path: ["ontology", "reason"]),
+    .init(arguments: ["ontology", "hierarchy", "world", "urn:Class", "--base", baseID], path: ["ontology", "hierarchy"]),
+    .init(arguments: ["ontology", "validate-schema", "world", "--base", baseID], path: ["ontology", "validate-schema"]),
+    .init(arguments: ["shacl", "describe", "urn:shapes", "--base", baseID], path: ["shacl", "describe"]),
+    .init(arguments: ["shacl", "upsert", "urn:shapes", "<urn:s> <urn:p> <urn:o> .", "--base", baseID], path: ["shacl", "upsert"]),
+    .init(arguments: ["shacl", "delete", "urn:shapes", "--base", baseID], path: ["shacl", "delete"]),
+    .init(arguments: ["shacl", "validate", "urn:shapes", "--entity", "Person", "--index", "byName", "--base", baseID], path: ["shacl", "validate"]),
+    .init(arguments: ["command", "run", "system.inspect", objectValue, "--base", baseID], path: ["command", "run"]),
+    .init(arguments: ["migration", "status", "--base", baseID], path: ["migration", "status"]),
+    .init(arguments: ["migration", "run", "--base", baseID], path: ["migration", "run"]),
+    .init(arguments: ["index", "status", "--base", baseID], path: ["index", "status"]),
+    .init(arguments: ["index", "rebuild", "Person", "byName", "--base", baseID], path: ["index", "rebuild"]),
+    .init(arguments: ["maintenance", "compact", "--base", baseID], path: ["maintenance", "compact"]),
+    .init(arguments: ["job", "status", uuid, "queryExecute", "query", "--base", baseID], path: ["job", "status"]),
+    .init(arguments: ["job", "wait", uuid, "queryExecute", "query", "--base", baseID], path: ["job", "wait"]),
+    .init(arguments: ["job", "result", uuid, "queryExecute", "query", "--base", baseID], path: ["job", "result"]),
+    .init(arguments: ["job", "cancel", uuid, "queryExecute", "query", "--base", baseID], path: ["job", "cancel"]),
     .init(arguments: ["shell"], path: ["shell"]),
     .init(arguments: ["inspect", "overview"], path: ["inspect", "overview"]),
     .init(arguments: ["inspect", "entities"], path: ["inspect", "entities"]),
-    .init(arguments: ["inspect", "indexes"], path: ["inspect", "indexes"]),
+    .init(arguments: ["inspect", "indexes", "--base", baseID], path: ["inspect", "indexes"]),
     .init(arguments: ["inspect", "graph"], path: ["inspect", "graph"]),
-    .init(arguments: ["inspect", "ontology", "world"], path: ["inspect", "ontology"]),
-    .init(arguments: ["inspect", "shapes", "urn:shapes"], path: ["inspect", "shapes"]),
+    .init(arguments: ["inspect", "ontology", "world", "--base", baseID], path: ["inspect", "ontology"]),
+    .init(arguments: ["inspect", "shapes", "urn:shapes", "--base", baseID], path: ["inspect", "shapes"]),
     .init(arguments: ["inspect", "jobs"], path: ["inspect", "jobs"]),
     .init(arguments: ["doctor"], path: ["doctor"]),
     .init(arguments: ["completion", "bash"], path: ["completion", "bash"]),
@@ -103,24 +123,33 @@ private let commandFixtures: [CommandFixture] = [
 ]
 
 private let idValue = #"{"$type":"string","value":"p1"}"#
+private let stringValue = #"{"$type":"string","value":"node"}"#
 private let objectValue = #"{"$type":"object","value":{}}"#
 private let uuid = "00000000-0000-0000-0000-000000000001"
 private let schemaJSON = #"{"formatVersion":1,"schemaVersion":{"major":1,"minor":0,"patch":0},"entities":[]}"#
 private let emptyFingerprint = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+private let baseID = "company-a"
+private let compositionID = "shared"
+private let initialGrant = "role:admin=administer"
 
 @Test("Every public command parses", arguments: commandFixtures)
 private func parsesEveryCommand(_ fixture: CommandFixture) throws {
     #expect(try CommandParser().parse(fixture.arguments).path == fixture.path)
 }
 
+@Test("Parser fixtures cover every public command path")
+func parserFixturesCoverCatalog() {
+    #expect(Set(commandFixtures.map(\.path)) == Set(CommandCatalog.standard.commands.map(\.path)))
+}
+
 @Test("One-shot and shell tokenization produce the same AST")
 func shellAndOneShotShareAST() throws {
-    let line = #"query sql "SELECT * FROM Person" --page-size 25 --output jsonl"#
+    let line = #"query sql "SELECT * FROM Person" --base company-a --page-size 25 --output jsonl"#
     let tokens = try ShellLexer().parse(line)
     let shellAST = try CommandParser().parse(tokens)
     let oneShotAST = try CommandParser().parse([
         "query", "sql", "SELECT * FROM Person",
-        "--page-size", "25", "--output", "jsonl",
+        "--base", "company-a", "--page-size", "25", "--output", "jsonl",
     ])
     #expect(shellAST == oneShotAST)
 }
@@ -140,15 +169,66 @@ func rejectsAmbiguousOptions() {
 @Test("All-page mode requires every explicit safety bound")
 func allRequiresBounds() {
     #expect(throws: DatabaseCLIError.self) {
-        try CommandParser().parse(["query", "sql", "SELECT 1", "--all"])
+        try CommandParser().parse(["query", "sql", "SELECT 1", "--base", baseID, "--all"])
     }
     #expect(throws: Never.self) {
         try CommandParser().parse([
-            "query", "sql", "SELECT 1", "--all",
+            "query", "sql", "SELECT 1", "--base", baseID, "--all",
             "--max-total-rows", "10",
             "--max-total-bytes", "4096",
             "--max-pages", "2",
         ])
+    }
+    #expect(throws: DatabaseCLIError.self) {
+        try CommandParser().parse([
+            "query", "sql", "SELECT 1", "--base", baseID,
+            "--max-total-rows", "10",
+        ])
+    }
+    #expect(throws: DatabaseCLIError.self) {
+        try CommandParser().parse([
+            "query", "sql", "SELECT 1", "--base", baseID, "--all",
+            "--max-total-rows", "10",
+            "--max-total-bytes", "4096",
+            "--max-pages", "2",
+            "--as-job", "query",
+        ])
+    }
+}
+
+@Test("Options that have no execution meaning are rejected")
+func rejectsInapplicableOptions() {
+    let parser = CommandParser()
+    #expect(throws: DatabaseCLIError.self) {
+        try parser.parse(["mutate", "sql", "DELETE FROM Person", "--page-size", "10"])
+    }
+    #expect(throws: DatabaseCLIError.self) {
+        try parser.parse(["entity", "insert", "Person", idValue, objectValue, "--parameter", "$1=int64:1"])
+    }
+    #expect(throws: DatabaseCLIError.self) {
+        try parser.parse(["migration", "run", "--page-size", "10"])
+    }
+    #expect(throws: DatabaseCLIError.self) {
+        try parser.parse(["job", "wait", uuid, "queryExecute", "query", "--base", baseID, "--as-job", "query"])
+    }
+    #expect(throws: DatabaseCLIError.self) {
+        try parser.parse(["profile", "list", "--profile", "local"])
+    }
+}
+
+@Test("Entity preconditions are mutually exclusive")
+func rejectsConflictingEntityPreconditions() {
+    let base = ["entity", "delete", "Person", idValue]
+    let combinations = [
+        ["--expected-version", "1", "--must-exist"],
+        ["--expected-version", "1", "--must-not-exist"],
+        ["--must-exist", "--must-not-exist"],
+    ]
+
+    for combination in combinations {
+        #expect(throws: DatabaseCLIError.self) {
+            try CommandParser().parse(base + combination)
+        }
     }
 }
 
@@ -161,6 +241,7 @@ func preservesMetaCommand() throws {
 func parameterInputContractsAreCatalogDriven() throws {
     let command = try CommandParser().parse([
         "query", "sql", "SELECT $1, $2",
+        "--base", baseID,
         "--parameter", "$1=int64:42",
         "--parameter", "$2=string:alice",
     ])
@@ -171,6 +252,7 @@ func parameterInputContractsAreCatalogDriven() throws {
     #expect(throws: DatabaseCLIError.self) {
         try CommandParser().parse([
             "query", "sql", "SELECT $1",
+            "--base", baseID,
             "--parameter", "$1=int64:42",
             "--parameters", #"{"$1":{"$type":"int64","value":"42"}}"#,
         ])
@@ -190,6 +272,19 @@ func requiredOptionsAreValidatedByCatalog() throws {
     }
     #expect(throws: DatabaseCLIError.self) {
         try CommandParser().parse(["serve", "database.sqlite"])
+    }
+    #expect(throws: DatabaseCLIError.self) {
+        try CommandParser().parse(["query", "sql", "SELECT 1"])
+    }
+    #expect(throws: DatabaseCLIError.self) {
+        try CommandParser().parse([
+            "query", "sql", "SELECT 1",
+            "--base", baseID,
+            "--composition", compositionID,
+        ])
+    }
+    #expect(throws: DatabaseCLIError.self) {
+        try CommandParser().parse(["grant", "effective", "--database-target"])
     }
     let parser = CommandParser()
     let postgreSQL = try StandaloneStorageSelection.resolve(

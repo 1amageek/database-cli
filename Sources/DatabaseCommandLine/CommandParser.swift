@@ -200,9 +200,7 @@ public struct CommandParser: Sendable {
         for command: CommandDescriptor
     ) throws {
         var errors: [String] = []
-        let descriptors = command.options + catalog.commonOptions
-        var visited = Set<String>()
-        for descriptor in descriptors where visited.insert(descriptor.name).inserted {
+        for descriptor in command.options {
             let count = options.occurrenceCount(descriptor.name)
             if count < descriptor.minimumOccurrences {
                 errors.append("Missing required option '--\(descriptor.name)'")
@@ -220,6 +218,20 @@ public struct CommandParser: Sendable {
                     "'--\(descriptor.name)' requires '--\(requirement)'"
                 )
             }
+        }
+        for requirement in command.requiredAnyOf where
+            requirement.isDisjoint(with: Set(
+                command.options.compactMap { descriptor in
+                    options.contains(descriptor.name) ? descriptor.name : nil
+                }
+            ))
+        {
+            errors.append(
+                "One of "
+                    + requirement.sorted().map { "'--\($0)'" }
+                        .joined(separator: ", ")
+                    + " is required"
+            )
         }
         let uniqueErrors = errors.reduce(into: [String]()) { result, error in
             if !result.contains(error) { result.append(error) }

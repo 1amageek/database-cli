@@ -45,7 +45,7 @@ File.open(transcript_path, "wb", 0o600) do |transcript|
         read_until(reader, transcript, buffer, "[sql:query]> ")
         writer.write("\\mode command\n")
         read_until(reader, transcript, buffer, "[command]> ")
-        writer.write("cap\t --output json\n")
+        writer.write("cap\t\n")
         read_until(
           reader,
           transcript,

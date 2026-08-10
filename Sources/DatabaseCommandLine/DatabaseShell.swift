@@ -1,3 +1,4 @@
+import DatabaseKit
 import DatabaseTypes
 import DatabaseWire
 import Foundation
@@ -45,6 +46,7 @@ struct DatabaseShell: Sendable {
                 ?? "unconfigured",
             database: databaseName ?? selectedProfile?.databaseID ?? "main",
             mode: initialMode,
+            target: nil,
             outputFormat: command.options.value("output"),
             pageSize: command.options.value("page-size"),
             persistentHistory: command.options.contains("persist-history"),
@@ -170,6 +172,7 @@ private extension DatabaseShell {
         var promptConnection: String
         var database: String
         var mode: ShellMode
+        var target: Target?
         var outputFormat: String?
         var pageSize: String?
         var timing = false
@@ -182,7 +185,20 @@ private extension DatabaseShell {
 
         var prompt: String {
             let suffix = statementLines.isEmpty ? "> " : "...> "
-            return "\(promptConnection)/\(database) [\(mode.promptLabel)]\(suffix)"
+            let targetLabel = target?.promptLabel ?? "target:none"
+            return "\(promptConnection)/\(database) [\(targetLabel)] [\(mode.promptLabel)]\(suffix)"
+        }
+    }
+
+    enum Target: Sendable, Equatable {
+        case base(String)
+        case composition(String)
+
+        var promptLabel: String {
+            switch self {
+            case .base(let id): "base:\(id)"
+            case .composition(let id): "composition:\(id)"
+            }
         }
     }
 
@@ -241,7 +257,7 @@ private extension DatabaseShell {
 
         let capabilities: CapabilitiesDescribeOperation.Response
         do {
-            capabilities = try await activeSession.client.execute(
+            capabilities = try await activeSession.client.database.execute(
                 DatabaseOperations.capabilitiesDescribe,
                 request: EmptyOperationPayload()
             )
@@ -261,7 +277,7 @@ private extension DatabaseShell {
             $0.identifier == "schema.describe"
         }) {
             do {
-                schema = try await activeSession.client.execute(
+                schema = try await activeSession.client.database.execute(
                     DatabaseOperations.schemaDescribe,
                     request: EmptyOperationPayload()
                 )
@@ -292,6 +308,8 @@ private extension DatabaseShell {
                 """
                 \\help
                 \\profile <name>
+                \\base <id>
+                \\composition <id>
                 \\output table|jsonl|json|csv|nquads
                 \\timing on|off
                 \\budget
@@ -318,6 +336,21 @@ private extension DatabaseShell {
             state.profile = profile.name
             state.promptConnection = profile.name
             state.database = profile.databaseID
+            state.target = nil
+        case "\\base":
+            guard tokens.count == 2 else {
+                throw DatabaseCLIError(.input, "Usage: \\base <id>")
+            }
+            _ = try Base.ID(tokens[1])
+            state.target = .base(tokens[1])
+            state.statementLines.removeAll(keepingCapacity: true)
+        case "\\composition":
+            guard tokens.count == 2 else {
+                throw DatabaseCLIError(.input, "Usage: \\composition <id>")
+            }
+            _ = try Base.Composition.ID(tokens[1])
+            state.target = .composition(tokens[1])
+            state.statementLines.removeAll(keepingCapacity: true)
         case "\\output":
             guard tokens.count == 2,
                   OutputFormat(rawValue: tokens[1]) != nil else {
@@ -409,9 +442,30 @@ private extension DatabaseShell {
         state: inout State
     ) async throws {
         var arguments = rawArguments
-        appendDefaultOption("profile", value: state.profile, to: &arguments)
-        appendDefaultOption("output", value: state.outputFormat, to: &arguments)
-        appendDefaultOption("page-size", value: state.pageSize, to: &arguments)
+        let descriptor = try commandDescriptor(for: rawArguments)
+        appendDefaultOption(
+            "profile",
+            value: state.profile,
+            whenSupportedBy: descriptor,
+            to: &arguments
+        )
+        appendDefaultOption(
+            "output",
+            value: state.outputFormat,
+            whenSupportedBy: descriptor,
+            to: &arguments
+        )
+        appendDefaultOption(
+            "page-size",
+            value: state.pageSize,
+            whenSupportedBy: descriptor,
+            to: &arguments
+        )
+        try appendSelectedTarget(
+            state.target,
+            whenSupportedBy: descriptor,
+            to: &arguments
+        )
         let executionArguments = arguments
 
         let capture = ContinuationCapture()
@@ -444,12 +498,82 @@ private extension DatabaseShell {
         }
     }
 
+    func commandDescriptor(
+        for arguments: [String]
+    ) throws -> CommandDescriptor {
+        if arguments == ["--version"]
+            || arguments == ["--help"]
+            || arguments == ["-h"] {
+            let parsed = try application.parser.parse(arguments)
+            guard let descriptor = application.parser.catalog.command(
+                for: parsed.path
+            ) else {
+                throw DatabaseCLIError(
+                    .internalFailure,
+                    "Global command alias is missing from the command catalog"
+                )
+            }
+            return descriptor
+        }
+        let prefix = arguments.prefix { !$0.hasPrefix("-") }
+        let maximum = min(3, prefix.count)
+        guard maximum > 0 else {
+            throw DatabaseCLIError(.input, "A command is required")
+        }
+        for count in stride(from: maximum, through: 1, by: -1) {
+            let path = Array(prefix.prefix(count))
+            if let descriptor = application.parser.catalog.command(for: path) {
+                return descriptor
+            }
+        }
+        throw DatabaseCLIError(
+            .input,
+            "Unknown shell command '\(prefix.joined(separator: " "))'"
+        )
+    }
+
+    func appendSelectedTarget(
+        _ target: Target?,
+        whenSupportedBy command: CommandDescriptor,
+        to arguments: inout [String]
+    ) throws {
+        let supportsBase = command.option(named: "base") != nil
+        let supportsComposition = command.option(named: "composition") != nil
+        guard supportsBase || supportsComposition else { return }
+        guard !arguments.contains("--base"),
+              !arguments.contains("--composition"),
+              !arguments.contains("--database-target"),
+              !arguments.contains(where: { $0.hasPrefix("--base=") }),
+              !arguments.contains(where: { $0.hasPrefix("--composition=") }) else {
+            return
+        }
+        guard let target else { return }
+        switch target {
+        case .base(let id) where supportsBase:
+            arguments.append(contentsOf: ["--base", id])
+        case .composition(let id) where supportsComposition:
+            arguments.append(contentsOf: ["--composition", id])
+        case .composition:
+            throw DatabaseCLIError(
+                .input,
+                "'\(command.path.joined(separator: " "))' requires a Base target"
+            )
+        case .base:
+            throw DatabaseCLIError(
+                .input,
+                "'\(command.path.joined(separator: " "))' does not accept a Base target"
+            )
+        }
+    }
+
     func appendDefaultOption(
         _ name: String,
         value: String?,
+        whenSupportedBy command: CommandDescriptor,
         to arguments: inout [String]
     ) {
-        guard let value,
+        guard command.option(named: name) != nil,
+              let value,
               !arguments.contains("--\(name)"),
               !arguments.contains(where: { $0.hasPrefix("--\(name)=") }) else {
             return

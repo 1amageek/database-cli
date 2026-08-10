@@ -47,8 +47,7 @@ struct ShellCompletionSnapshot: Sendable, Hashable {
                 )
             }
             let commandContext = command.path.joined(separator: " ") + " "
-            let options = command.options + catalog.commonOptions
-            for option in options {
+            for option in command.options {
                 result.insert(
                     ShellCompletionEntry(
                         context: commandContext,
@@ -64,8 +63,7 @@ struct ShellCompletionSnapshot: Sendable, Hashable {
                     )
                 )
             }
-            if command.option(named: "output") != nil
-                || catalog.option(named: "output", for: command) != nil {
+            if command.option(named: "output") != nil {
                 for format in ["table", "jsonl", "json", "csv", "nquads"] {
                     result.insert(
                         ShellCompletionEntry(
@@ -112,7 +110,8 @@ private extension ShellCompletionSnapshot {
         profiles: [String]
     ) {
         for command in [
-            "\\help", "\\profile", "\\output", "\\timing", "\\budget",
+            "\\help", "\\profile", "\\base", "\\composition", "\\output",
+            "\\timing", "\\budget",
             "\\page-size", "\\next", "\\history", "\\mode", "\\g",
             "\\clear", "\\quit",
         ] {

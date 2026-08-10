@@ -59,6 +59,8 @@ extension ResultRenderer {
                     ])
                 })),
             ])
+        case .accepted(let job):
+            node = jobNode(job, event: "accepted")
         case .applied(let applied):
             node = .object([
                 ("type", .string("schemaApplied")),
@@ -68,7 +70,100 @@ extension ResultRenderer {
                 ("fingerprint", .string(Base64URL.encode(applied.fingerprint.bytes))),
                 ("schemaVersion", .string(applied.schemaVersion.description)),
                 ("generation", .string(String(applied.generation))),
-                ("job", applied.job.map { jobNode($0, event: nil) } ?? .null),
+            ])
+        }
+        _ = try renderJSON(node)
+    }
+
+    func renderBaseExecution(
+        _ response: BaseExecuteOperation.Response
+    ) throws {
+        let node: StrictJSONValue
+        switch response {
+        case .placements(let placements):
+            node = .object([
+                ("type", .string("placements")),
+                ("placements", .array(placements.map { placement in
+                    .object([
+                        ("id", .string(placement.id.value)),
+                        ("default", .bool(placement.isDefault)),
+                    ])
+                })),
+            ])
+        case .bases(let bases):
+            node = .object([
+                ("type", .string("bases")),
+                ("bases", .array(bases.map(baseDescriptionNode))),
+            ])
+        case .base(let base):
+            node = baseDescriptionNode(base)
+        case .plan(let plan):
+            node = .object([
+                ("type", .string("basePlan")),
+                ("action", .string(basePlanAction(plan.action))),
+                ("currentRevision", .string(String(plan.currentRevision))),
+                ("resultingRevision", .string(String(plan.resultingRevision))),
+                ("destinationPlacement", plan.destinationPlacementID.map {
+                    .string($0.value)
+                } ?? .null),
+                ("layoutFingerprint", plan.layoutFingerprint.map {
+                    .string(Base64URL.encode($0.bytes))
+                } ?? .null),
+                ("requiresJob", .bool(plan.requiresJob)),
+            ])
+        case .job(let job):
+            node = jobNode(job, event: "started")
+        }
+        _ = try renderJSON(node)
+    }
+
+    func renderCompositionExecution(
+        _ response: CompositionExecuteOperation.Response
+    ) throws {
+        let node: StrictJSONValue
+        switch response {
+        case .compositions(let descriptions):
+            node = .object([
+                ("type", .string("compositions")),
+                ("compositions", .array(
+                    descriptions.map(compositionDescriptionNode)
+                )),
+            ])
+        case .composition(let description):
+            node = compositionDescriptionNode(description)
+        case .mutation(let mutation):
+            node = .object([
+                ("type", .string("compositionMutation")),
+                ("revision", .string(String(mutation.revision))),
+                ("generation", .string(String(mutation.generation))),
+            ])
+        }
+        _ = try renderJSON(node)
+    }
+
+    func renderGrantExecution(
+        _ response: GrantExecuteOperation.Response
+    ) throws {
+        let node: StrictJSONValue
+        switch response {
+        case .direct(let direct):
+            node = .object([
+                ("type", .string("directGrants")),
+                ("revision", .string(String(direct.revision))),
+                ("grants", .array(direct.grants.map(grantNode))),
+            ])
+        case .effective(let effective):
+            node = .object([
+                ("type", .string("effectiveGrant")),
+                ("access", accessNode(effective.access)),
+                ("contributors", .array(
+                    effective.contributors.map(grantNode)
+                )),
+            ])
+        case .mutated(let revision):
+            node = .object([
+                ("type", .string("grantMutation")),
+                ("revision", .string(String(revision))),
             ])
         }
         _ = try renderJSON(node)
@@ -738,11 +833,138 @@ private extension ResultRenderer {
         return report.continuation
     }
 
+    func baseDescriptionNode(
+        _ description: BaseExecuteOperation.Description
+    ) -> StrictJSONValue {
+        .object([
+            ("type", .string("base")),
+            ("id", .string(description.id.value)),
+            ("placement", .string(description.placementID.value)),
+            ("placementGeneration", .string(
+                String(description.placementGeneration)
+            )),
+            ("revision", .string(String(description.revision))),
+            ("lifecycle", .string(baseLifecycle(description.lifecycle))),
+        ])
+    }
+
+    func compositionDescriptionNode(
+        _ description: CompositionExecuteOperation.Description
+    ) -> StrictJSONValue {
+        .object([
+            ("type", .string("composition")),
+            ("id", .string(description.composition.id.value)),
+            ("bases", .array(description.composition.bases.map {
+                .string($0.value)
+            })),
+            ("revision", .string(String(description.revision))),
+            ("generation", .string(String(description.generation))),
+        ])
+    }
+
+    func grantNode(_ grant: Security.Grant) -> StrictJSONValue {
+        .object([
+            ("subject", securitySubjectNode(grant.subject)),
+            ("resource", securityResourceNode(grant.resource)),
+            ("access", accessNode(grant.access)),
+        ])
+    }
+
+    func securitySubjectNode(
+        _ subject: Security.Subject
+    ) -> StrictJSONValue {
+        switch subject {
+        case .principal(let identifier):
+            .object([
+                ("kind", .string("principal")),
+                ("identifier", .string(identifier)),
+            ])
+        case .principalRole(let identifier):
+            .object([
+                ("kind", .string("role")),
+                ("identifier", .string(identifier)),
+            ])
+        }
+    }
+
+    func securityResourceNode(
+        _ resource: Security.Resource
+    ) -> StrictJSONValue {
+        switch resource {
+        case .database:
+            .object([("kind", .string("database"))])
+        case .base(let id):
+            .object([
+                ("kind", .string("base")),
+                ("id", .string(id.value)),
+            ])
+        }
+    }
+
+    func accessNode(_ access: Security.Access) -> StrictJSONValue {
+        var values: [StrictJSONValue] = []
+        if access.contains(.read) { values.append(.string("read")) }
+        if access.contains(.write) { values.append(.string("write")) }
+        if access.contains(.administer) {
+            values.append(.string("administer"))
+        }
+        return .array(values)
+    }
+
+    func operationTargetNode(
+        _ target: DatabaseOperationTarget
+    ) -> StrictJSONValue {
+        switch target {
+        case .database:
+            .object([("kind", .string("database"))])
+        case .base(let id):
+            .object([
+                ("kind", .string("base")),
+                ("id", .string(id.value)),
+            ])
+        case .composition(let id):
+            .object([
+                ("kind", .string("composition")),
+                ("id", .string(id.value)),
+            ])
+        }
+    }
+
+    func baseLifecycle(
+        _ value: BaseExecuteOperation.LifecycleState
+    ) -> String {
+        switch value {
+        case .provisioning: "provisioning"
+        case .active: "active"
+        case .retiring: "retiring"
+        case .retired: "retired"
+        case .moving: "moving"
+        case .deleting: "deleting"
+        case .tombstone: "tombstone"
+        }
+    }
+
+    func basePlanAction(
+        _ value: BaseExecuteOperation.Plan.Action
+    ) -> String {
+        switch value {
+        case .create: "create"
+        case .retire: "retire"
+        case .activate: "activate"
+        case .delete: "delete"
+        case .move: "move"
+        case .migrateLegacyLayout: "migrateLegacyLayout"
+        }
+    }
+
     func operationName(_ value: DatabaseOperationIdentifier) -> String {
         switch value {
         case .capabilitiesDescribe: "capabilitiesDescribe"
         case .schemaDescribe: "schemaDescribe"
         case .schemaExecute: "schemaExecute"
+        case .baseExecute: "baseExecute"
+        case .compositionExecute: "compositionExecute"
+        case .grantExecute: "grantExecute"
         case .queryExecute: "queryExecute"
         case .mutationExecute: "mutationExecute"
         case .graphAlgorithm: "graphAlgorithm"
@@ -766,6 +988,7 @@ private extension ResultRenderer {
         fields.append(("id", .string(job.jobID.description)))
         fields.append(("family", .string(operationName(job.operation.family))))
         fields.append(("kind", .string(job.operation.kind)))
+        fields.append(("target", operationTargetNode(job.target)))
         return .object(fields)
     }
 

@@ -1,43 +1,58 @@
+import Darwin
 import Foundation
 @testable import DatabaseCommandLine
 import Testing
 
-@Suite("Database server executable")
+@Suite("Database server executable", .serialized)
 struct DatabaseServerExecutableTests {
     @Test("Version validation accepts only the exact adjacent version")
     func exactVersionIsRequired() async throws {
         try await withExecutable(
-            "#!/bin/sh\nprintf '26.0809.1\\n'\n"
+            "#!/bin/sh\nprintf '26.0809.2\\n'\n"
         ) { url in
             let executable = DatabaseServerExecutable(url: url)
             try await executable.validateVersion(
-                expected: "26.0809.1",
+                expected: "26.0809.2",
                 timeout: .seconds(1)
             )
             await #expect(throws: DatabaseCLIError.self) {
                 try await executable.validateVersion(
-                    expected: "26.0809.2",
+                    expected: "26.0809.3",
                     timeout: .seconds(1)
                 )
             }
         }
     }
 
-    @Test("Version validation terminates a non-responsive executable")
+    @Test(
+        "Version validation terminates a non-responsive executable",
+        .timeLimit(.minutes(1))
+    )
     func timeoutTerminatesProcess() async throws {
         try await withExecutable(
-            "#!/bin/sh\ntrap '' TERM\nwhile true; do :; done\n"
+            "#!/bin/sh\nprintf '%s' \"$$\" > \"${0%/*}/pid\"\ntrap '' TERM\nexec sleep 60\n"
         ) { url in
             let executable = DatabaseServerExecutable(url: url)
-            let clock = ContinuousClock()
-            let started = clock.now
-            await #expect(throws: DatabaseCLIError.self) {
+            do {
                 try await executable.validateVersion(
-                    expected: "26.0809.1",
-                    timeout: .milliseconds(100)
+                    expected: "26.0809.2",
+                    timeout: .seconds(1)
                 )
+                Issue.record("Expected version validation to time out")
+            } catch let error as DatabaseCLIError {
+                #expect(error.exitCode == .unavailable)
+                #expect(error.message == "database-server version check timed out")
+            } catch {
+                Issue.record("Unexpected error: \(error)")
             }
-            #expect(started.duration(to: clock.now) < .seconds(3))
+
+            let pidURL = url.deletingLastPathComponent()
+                .appendingPathComponent("pid", isDirectory: false)
+            let pidText = try String(contentsOf: pidURL, encoding: .utf8)
+            let pid = try #require(Int32(pidText))
+            errno = 0
+            #expect(Darwin.kill(pid, 0) == -1)
+            #expect(errno == ESRCH)
         }
     }
 

@@ -6,8 +6,8 @@ import StorageKitSystemClock
 struct FDBCatalogInspector: Sendable {
     let output: FDBOutput
 
-    func list(engine: any StorageEngine) async throws {
-        let entities = try await loadEntities(engine: engine)
+    func list(engine: any StorageEngine, root: Subspace) async throws {
+        let entities = try await loadEntities(engine: engine, root: root)
         for entity in entities {
             try output.json([
                 "name": entity.name,
@@ -17,8 +17,12 @@ struct FDBCatalogInspector: Sendable {
         }
     }
 
-    func show(name: String, engine: any StorageEngine) async throws {
-        let entities = try await loadEntities(engine: engine)
+    func show(
+        name: String,
+        engine: any StorageEngine,
+        root: Subspace
+    ) async throws {
+        let entities = try await loadEntities(engine: engine, root: root)
         guard let entity = entities.first(where: { $0.name == name }) else {
             throw FDBCLIError(.notFound, "Catalog entity '\(name)' was not found")
         }
@@ -52,15 +56,18 @@ struct FDBCatalogInspector: Sendable {
 
 private extension FDBCatalogInspector {
     func loadEntities(
-        engine: any StorageEngine
+        engine: any StorageEngine,
+        root: Subspace
     ) async throws -> [Schema.Entity] {
         let clock = SystemStorageClock()
         _ = try await DatabaseFormatCatalog(
             database: engine,
+            root: root,
             clock: clock
         ).loadRequired()
         return try await SchemaRegistry(
             database: engine,
+            root: root,
             clock: clock
         ).loadAll().sorted { $0.name < $1.name }
     }

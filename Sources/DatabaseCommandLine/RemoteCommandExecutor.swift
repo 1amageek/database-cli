@@ -38,7 +38,7 @@ struct RemoteCommandExecutor: Sendable {
         switch command.path {
         case ["capabilities"]:
             try rejectJobOption(command)
-            let response = try await session.client.execute(
+            let response = try await databaseClient.execute(
                 DatabaseOperations.capabilitiesDescribe,
                 request: EmptyOperationPayload(),
                 metadata: execution.metadata
@@ -46,7 +46,7 @@ struct RemoteCommandExecutor: Sendable {
             try renderer.renderCapabilities(response)
         case ["schema", "list"]:
             try rejectJobOption(command)
-            let response = try await session.client.execute(
+            let response = try await databaseClient.execute(
                 DatabaseOperations.schemaDescribe,
                 request: EmptyOperationPayload(),
                 metadata: execution.metadata
@@ -54,7 +54,7 @@ struct RemoteCommandExecutor: Sendable {
             try renderer.renderSchema(response, entity: nil)
         case ["schema", "show"]:
             try rejectJobOption(command)
-            let response = try await session.client.execute(
+            let response = try await databaseClient.execute(
                 DatabaseOperations.schemaDescribe,
                 request: EmptyOperationPayload(),
                 metadata: execution.metadata
@@ -73,20 +73,44 @@ struct RemoteCommandExecutor: Sendable {
                 renderer: renderer
             ) { return }
             try renderer.renderSchemaExecution(
-                try await session.client.execute(
+                try await databaseClient.execute(
                     DatabaseOperations.schemaExecute,
                     request: request,
                     metadata: execution.metadata
                 )
             )
+        case let path where path.first == "base":
+            try renderer.renderBaseExecution(
+                try await targetedClient(command).execute(
+                    DatabaseOperations.baseExecute,
+                    request: builder.baseExecutionRequest(command),
+                    metadata: execution.metadata
+                )
+            )
+        case let path where path.first == "composition":
+            try renderer.renderCompositionExecution(
+                try await targetedClient(command).execute(
+                    DatabaseOperations.compositionExecute,
+                    request: builder.compositionExecutionRequest(command),
+                    metadata: execution.metadata
+                )
+            )
+        case let path where path.first == "grant":
+            try renderer.renderGrantExecution(
+                try await targetedClient(command).execute(
+                    DatabaseOperations.grantExecute,
+                    request: builder.grantExecutionRequest(command),
+                    metadata: execution.metadata
+                )
+            )
         case ["inspect", "overview"]:
             try rejectJobOption(command)
-            async let capabilities = session.client.execute(
+            async let capabilities = databaseClient.execute(
                 DatabaseOperations.capabilitiesDescribe,
                 request: EmptyOperationPayload(),
                 metadata: execution.metadata
             )
-            async let schema = session.client.execute(
+            async let schema = databaseClient.execute(
                 DatabaseOperations.schemaDescribe,
                 request: EmptyOperationPayload(),
                 metadata: execution.metadata
@@ -97,7 +121,7 @@ struct RemoteCommandExecutor: Sendable {
             )
         case ["inspect", "entities"]:
             try rejectJobOption(command)
-            let response = try await session.client.execute(
+            let response = try await databaseClient.execute(
                 DatabaseOperations.schemaDescribe,
                 request: EmptyOperationPayload(),
                 metadata: execution.metadata
@@ -108,12 +132,12 @@ struct RemoteCommandExecutor: Sendable {
             )
         case ["inspect", "indexes"]:
             try rejectJobOption(command)
-            async let schema = session.client.execute(
+            async let schema = databaseClient.execute(
                 DatabaseOperations.schemaDescribe,
                 request: EmptyOperationPayload(),
                 metadata: execution.metadata
             )
-            async let status = session.client.execute(
+            async let status = targetedClient(command).execute(
                 DatabaseOperations.maintenanceExecute,
                 request: MaintenanceExecuteOperation.Request(
                     invocation: .indexStatus(
@@ -133,7 +157,7 @@ struct RemoteCommandExecutor: Sendable {
             )
         case ["inspect", "graph"]:
             try rejectJobOption(command)
-            let response = try await session.client.execute(
+            let response = try await databaseClient.execute(
                 DatabaseOperations.schemaDescribe,
                 request: EmptyOperationPayload(),
                 metadata: execution.metadata
@@ -145,7 +169,7 @@ struct RemoteCommandExecutor: Sendable {
         case ["inspect", "jobs"]:
             try rejectJobOption(command)
             try renderer.renderAdvertisedJobs(
-                try await session.client.execute(
+                try await databaseClient.execute(
                     DatabaseOperations.capabilitiesDescribe,
                     request: EmptyOperationPayload(),
                     metadata: execution.metadata
@@ -229,7 +253,7 @@ struct RemoteCommandExecutor: Sendable {
                 metadata: execution.metadata,
                 renderer: renderer
             ) { return }
-            let response = try await session.client.execute(
+            let response = try await targetedClient(command).execute(
                 DatabaseOperations.commandExecute,
                 request: request,
                 metadata: execution.metadata
@@ -247,7 +271,7 @@ struct RemoteCommandExecutor: Sendable {
         case ["job", "status"]:
             try rejectJobOption(command)
             try renderer.renderJobStatus(
-                try await session.client.jobStatus(
+                try await targetedClient(command).jobStatus(
                     for: try jobIdentity(command),
                     metadata: execution.metadata
                 )
@@ -270,7 +294,7 @@ struct RemoteCommandExecutor: Sendable {
         case ["job", "cancel"]:
             try rejectJobOption(command)
             try renderer.renderJobCancellation(
-                try await session.client.cancelJob(
+                try await targetedClient(command).cancelJob(
                     try jobIdentity(command),
                     metadata: execution.metadata
                 )
@@ -285,6 +309,16 @@ struct RemoteCommandExecutor: Sendable {
 }
 
 private extension RemoteCommandExecutor {
+    var databaseClient: TargetedDatabaseClient<AnyDatabaseTransport> {
+        session.client.database
+    }
+
+    func targetedClient(
+        _ command: ParsedCommand
+    ) throws -> TargetedDatabaseClient<AnyDatabaseTransport> {
+        session.client.targeting(try builder.operationTarget(command))
+    }
+
     struct PageTotals {
         var pages: UInt32 = 0
         var elements: UInt64 = 0
@@ -378,7 +412,7 @@ private extension RemoteCommandExecutor {
                 try totals.requirePageCapacity(execution.pagination)
             }
             let pageExecution = totals.executionPage(execution)
-            let response = try await session.client.execute(
+            let response = try await targetedClient(command).execute(
                 DatabaseOperations.queryExecute,
                 request: try builder.queryRequest(
                     command,
@@ -419,7 +453,7 @@ private extension RemoteCommandExecutor {
             renderer: renderer
         ) { return }
         try renderer.renderMutation(
-            try await session.client.execute(
+            try await targetedClient(command).execute(
                 DatabaseOperations.mutationExecute,
                 request: request,
                 metadata: execution.metadata
@@ -452,7 +486,7 @@ private extension RemoteCommandExecutor {
             if execution.pagination.fetchAll {
                 try totals.requirePageCapacity(execution.pagination)
             }
-            let response = try await session.client.execute(
+            let response = try await targetedClient(command).execute(
                 DatabaseOperations.graphAlgorithm,
                 request: try builder.graphRequest(
                     command,
@@ -503,7 +537,7 @@ private extension RemoteCommandExecutor {
             if execution.pagination.fetchAll {
                 try totals.requirePageCapacity(execution.pagination)
             }
-            let response = try await session.client.execute(
+            let response = try await targetedClient(command).execute(
                 DatabaseOperations.ontologyExecute,
                 request: try builder.ontologyRequest(
                     command,
@@ -554,7 +588,7 @@ private extension RemoteCommandExecutor {
             if execution.pagination.fetchAll {
                 try totals.requirePageCapacity(execution.pagination)
             }
-            let response = try await session.client.execute(
+            let response = try await targetedClient(command).execute(
                 DatabaseOperations.shaclExecute,
                 request: try builder.shaclRequest(
                     command,
@@ -605,7 +639,7 @@ private extension RemoteCommandExecutor {
             if execution.pagination.fetchAll {
                 try totals.requirePageCapacity(execution.pagination)
             }
-            let response = try await session.client.execute(
+            let response = try await targetedClient(command).execute(
                 DatabaseOperations.maintenanceExecute,
                 request: try builder.maintenanceRequest(
                     command,
@@ -646,7 +680,7 @@ private extension RemoteCommandExecutor {
         } catch {
             throw DatabaseCLIError(.input, "Invalid job kind: \(error)")
         }
-        let capabilities = try await session.client.execute(
+        let capabilities = try await databaseClient.execute(
             DatabaseOperations.capabilitiesDescribe,
             request: EmptyOperationPayload(),
             metadata: metadata
@@ -658,7 +692,7 @@ private extension RemoteCommandExecutor {
             )
         }
         try renderer.renderJobStarted(
-            try await session.client.startJob(
+            try await targetedClient(command).startJob(
                 descriptor,
                 request: request,
                 metadata: metadata
@@ -688,7 +722,7 @@ private extension RemoteCommandExecutor {
         let deadline = clock.now.advanced(by: .milliseconds(Int64(timeout)))
         while true {
             try Task.checkCancellation()
-            let response = try await session.client.jobStatus(
+            let response = try await targetedClient(command).jobStatus(
                 for: job,
                 metadata: execution.metadata
             )
@@ -720,10 +754,21 @@ private extension RemoteCommandExecutor {
         format: OutputFormat
     ) async throws {
         let job = try jobIdentity(command)
+        let client = try targetedClient(command)
         switch job.operation.family {
+        case .baseExecute:
+            try renderer.renderBaseExecution(
+                try await client.jobResult(
+                    for: job,
+                    using: try DatabaseOperations.baseExecute.resumableJob(
+                        kind: job.operation.kind
+                    ),
+                    metadata: execution.metadata
+                )
+            )
         case .schemaExecute:
             try renderer.renderSchemaExecution(
-                try await session.client.jobResult(
+                try await client.jobResult(
                     for: job,
                     using: try DatabaseOperations.schemaExecute.resumableJob(
                         kind: job.operation.kind
@@ -733,7 +778,7 @@ private extension RemoteCommandExecutor {
             )
         case .queryExecute:
             try _ = renderer.renderQuery(
-                try await session.client.jobResult(
+                try await client.jobResult(
                     for: job,
                     using: try DatabaseOperations.queryExecute.resumableJob(
                         kind: job.operation.kind
@@ -744,7 +789,7 @@ private extension RemoteCommandExecutor {
             )
         case .mutationExecute:
             try renderer.renderMutation(
-                try await session.client.jobResult(
+                try await client.jobResult(
                     for: job,
                     using: try DatabaseOperations.mutationExecute.resumableJob(
                         kind: job.operation.kind
@@ -754,7 +799,7 @@ private extension RemoteCommandExecutor {
             )
         case .graphAlgorithm:
             try _ = renderer.renderGraph(
-                try await session.client.jobResult(
+                try await client.jobResult(
                     for: job,
                     using: try DatabaseOperations.graphAlgorithm.resumableJob(
                         kind: job.operation.kind
@@ -765,7 +810,7 @@ private extension RemoteCommandExecutor {
             )
         case .ontologyExecute:
             try _ = renderer.renderOntology(
-                try await session.client.jobResult(
+                try await client.jobResult(
                     for: job,
                     using: try DatabaseOperations.ontologyExecute.resumableJob(
                         kind: job.operation.kind
@@ -776,7 +821,7 @@ private extension RemoteCommandExecutor {
             )
         case .shaclExecute:
             try _ = renderer.renderSHACL(
-                try await session.client.jobResult(
+                try await client.jobResult(
                     for: job,
                     using: try DatabaseOperations.shaclExecute.resumableJob(
                         kind: job.operation.kind
@@ -787,7 +832,7 @@ private extension RemoteCommandExecutor {
             )
         case .commandExecute:
             try _ = renderer.renderCommand(
-                try await session.client.jobResult(
+                try await client.jobResult(
                     for: job,
                     using: try DatabaseOperations.commandExecute.resumableJob(
                         kind: job.operation.kind
@@ -798,7 +843,7 @@ private extension RemoteCommandExecutor {
             )
         case .maintenanceExecute:
             try _ = renderer.renderMaintenance(
-                try await session.client.jobResult(
+                try await client.jobResult(
                     for: job,
                     using: try DatabaseOperations.maintenanceExecute.resumableJob(
                         kind: job.operation.kind
@@ -807,8 +852,8 @@ private extension RemoteCommandExecutor {
                 ),
                 format: format
             )
-        case .capabilitiesDescribe, .schemaDescribe, .jobStart, .jobStatus,
-             .jobResult, .jobCancel:
+        case .capabilitiesDescribe, .schemaDescribe, .compositionExecute,
+             .grantExecute, .jobStart, .jobStatus, .jobResult, .jobCancel:
             throw DatabaseCLIError(.input, "Operation family does not support jobs")
         }
     }
@@ -826,7 +871,8 @@ private extension RemoteCommandExecutor {
                 operation: try JobOperationIdentifier(
                     family: family,
                     kind: command.positionals[2]
-                )
+                ),
+                target: try builder.operationTarget(command)
             )
         } catch {
             throw DatabaseCLIError(.input, "Invalid job operation: \(error)")
@@ -846,6 +892,9 @@ private extension RemoteCommandExecutor {
         case .capabilitiesDescribe: "capabilitiesDescribe"
         case .schemaDescribe: "schemaDescribe"
         case .schemaExecute: "schemaExecute"
+        case .baseExecute: "baseExecute"
+        case .compositionExecute: "compositionExecute"
+        case .grantExecute: "grantExecute"
         case .queryExecute: "queryExecute"
         case .mutationExecute: "mutationExecute"
         case .graphAlgorithm: "graphAlgorithm"

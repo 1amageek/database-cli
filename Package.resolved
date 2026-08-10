@@ -1,13 +1,13 @@
 {
-  "originHash" : "3c70254506a5dee5021796d2ad718b85dbd045440a85e8ecac6bcd2709aa9857",
+  "originHash" : "a06ea613a3d38910dba0128ed42f9517cb3949ffee6577a299531b0bd6864533",
   "pins" : [
     {
       "identity" : "database-client",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/database-client.git",
       "state" : {
-        "revision" : "b3f6db2351db954471949f11607f0cd176726afb",
-        "version" : "26.809.0"
+        "revision" : "14b39d6e1ede501b7a0f12f4d205110832ba1057",
+        "version" : "26.809.1"
       }
     },
     {
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/database-framework.git",
       "state" : {
-        "revision" : "be27247ebe88a7e0e11fd992e97344488bca5de2",
-        "version" : "26.809.1"
+        "revision" : "55d867014205195de61ffd25acccbbdbd483a11c",
+        "version" : "26.809.3"
       }
     },
     {
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/database-kit.git",
       "state" : {
-        "revision" : "fb38c3a7f1a72de3e52190cf9e34a6ce11e551f2",
-        "version" : "26.809.4"
+        "revision" : "cc7e4d25cb0b412b2511f8570c26821753a85f81",
+        "version" : "26.809.8"
       }
     },
     {

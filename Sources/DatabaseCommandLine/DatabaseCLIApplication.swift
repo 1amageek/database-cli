@@ -4,7 +4,7 @@ import Foundation
 import Synchronization
 
 public enum DatabaseCLIVersion {
-    public static let current = "26.0809.1"
+    public static let current = "26.0809.2"
 }
 
 public typealias RemoteSessionFactory = @Sendable (
@@ -147,7 +147,7 @@ extension DatabaseCLIApplication {
             maximumFrameBytes: maximumFrameBytes
         )
         do {
-            let capabilities = try await local.remoteSession.client.execute(
+            let capabilities = try await local.remoteSession.client.database.execute(
                 DatabaseOperations.capabilitiesDescribe,
                 request: EmptyOperationPayload()
             )
@@ -208,6 +208,9 @@ extension DatabaseCLIApplication {
         }
         let listener = try command.options.value("listen")
             .map(parseListener)
+        try SecureLocalFile.ensureDirectory(
+            configurationURL.deletingLastPathComponent()
+        )
         let executable = try DatabaseServerExecutable.adjacent()
         let originalDocument = try profiles.load()
         let originalStoredToken = try credentials.storedToken(
@@ -365,7 +368,7 @@ extension DatabaseCLIApplication {
         to session: RemoteSession
     ) async throws {
         let manifest = try WireRequestBuilder().schemaManifest(specification)
-        let planResponse = try await session.client.execute(
+        let planResponse = try await session.client.database.execute(
             DatabaseOperations.schemaExecute,
             request: SchemaExecuteOperation.Request(
                 invocation: .plan(
@@ -388,7 +391,7 @@ extension DatabaseCLIApplication {
         }
 
         let idempotencyKey = "database-open-\(UUID().uuidString.lowercased())"
-        let applyResponse = try await session.client.execute(
+        let applyResponse = try await session.client.database.execute(
             DatabaseOperations.schemaExecute,
             request: SchemaExecuteOperation.Request(
                 invocation: .apply(
@@ -419,23 +422,26 @@ extension DatabaseCLIApplication {
             text += " — \(command.summary)\n\n"
             text += "Usage:\n  database \(command.path.joined(separator: " "))"
             if !command.usage.isEmpty { text += " \(command.usage)" }
-            if !command.options.isEmpty || shouldShowCommonOptions(for: command) {
+            if !command.options.isEmpty {
                 text += " [options]"
             }
             text += "\n"
             if let capability = command.capability {
                 text += "\nCapability:\n  \(capability)\n"
             }
-            let options = command.options
-                + (shouldShowCommonOptions(for: command)
-                    ? catalog.commonOptions.filter {
-                        command.option(named: $0.name) == nil
-                    }
-                    : [])
-            if !options.isEmpty {
+            if !command.options.isEmpty {
                 text += "\nOptions:\n"
-                for option in options.sorted(by: { $0.name < $1.name }) {
+                for option in command.options.sorted(by: { $0.name < $1.name }) {
                     text += helpLine(for: option)
+                }
+            }
+            if !command.requiredAnyOf.isEmpty {
+                text += "\nRequirements:\n"
+                for requirement in command.requiredAnyOf {
+                    text += "  one of: "
+                        + requirement.sorted().map { "--\($0)" }
+                            .joined(separator: ", ")
+                        + "\n"
                 }
             }
             _ = try output.result(text + "\n")
@@ -464,15 +470,6 @@ extension DatabaseCLIApplication {
         }
         text += "\nUse 'database help <command>' for exact options.\n"
         _ = try output.result(text)
-    }
-
-    func shouldShowCommonOptions(for command: CommandDescriptor) -> Bool {
-        guard let root = command.path.first else { return false }
-        return ![
-            "help", "version", "profile", "auth", "completion", "fdb",
-            "open", "serve",
-        ]
-            .contains(root)
     }
 
     func helpLine(for option: CommandOptionDescriptor) -> String {

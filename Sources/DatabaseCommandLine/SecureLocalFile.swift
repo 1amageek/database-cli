@@ -66,13 +66,37 @@ enum SecureLocalFile {
         descriptorIsOpen = false
     }
 
-    private static func ensureDirectory(_ url: URL) throws {
-        try FileManager.default.createDirectory(
-            at: url,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        try validateDirectory(url)
+    static func ensureDirectory(_ url: URL) throws {
+        let target = url.standardizedFileURL
+        var missing: [URL] = []
+        var cursor = target
+
+        while true {
+            var metadata = stat()
+            if Darwin.lstat(cursor.path, &metadata) == 0 {
+                guard metadata.st_mode & S_IFMT == S_IFDIR else {
+                    throw SecureLocalFileError.invalidDirectory
+                }
+                break
+            }
+            guard errno == ENOENT else {
+                throw SecureLocalFileError.invalidDirectory
+            }
+            missing.append(cursor)
+            let parent = cursor.deletingLastPathComponent()
+            guard parent.path != cursor.path else {
+                throw SecureLocalFileError.invalidDirectory
+            }
+            cursor = parent
+        }
+
+        for directory in missing.reversed() {
+            if Darwin.mkdir(directory.path, S_IRWXU) != 0, errno != EEXIST {
+                throw SecureLocalFileError.invalidDirectory
+            }
+            try validateDirectory(directory)
+        }
+        try validateDirectory(target)
     }
 
     private static func validateDirectory(_ url: URL) throws {

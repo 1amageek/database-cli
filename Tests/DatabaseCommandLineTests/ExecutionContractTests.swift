@@ -1,3 +1,4 @@
+import DatabaseKit
 import DatabaseTypes
 import DatabaseWire
 import Foundation
@@ -8,6 +9,7 @@ import Testing
 func mapsExecutionContract() throws {
     let command = try CommandParser().parse([
         "query", "sql", "SELECT 1",
+        "--base", "company-a",
         "--trace-id", "trace-1",
         "--idempotency-key", "request-1",
         "--maximum-rows", "11",
@@ -93,10 +95,62 @@ func rejectsIncompatibleOutput() throws {
             diagnosticHandle: FileHandle.nullDevice
         )
     )
+    let result = try QueryBooleanResult(
+        value: true,
+        provenance: nil,
+        consistency: .transactional(
+            try DomainReadPoint(domainID: "primary", position: .version(1))
+        )
+    )
     #expect(throws: DatabaseCLIError.self) {
-        try renderer.renderQuery(.boolean(true), format: .csv)
+        try renderer.renderQuery(.boolean(result), format: .csv)
     }
     #expect(throws: DatabaseCLIError.self) {
-        try renderer.renderQuery(.boolean(true), format: .nquads)
+        try renderer.renderQuery(.boolean(result), format: .nquads)
     }
+}
+
+@Test("Composition rows stream provenance and consistency without materializing the page")
+func rendersCompositionProvenance() throws {
+    let temporary = FileManager.default.temporaryDirectory
+        .appendingPathComponent(Foundation.UUID().uuidString)
+    #expect(FileManager.default.createFile(atPath: temporary.path, contents: nil))
+    let handle = try FileHandle(forWritingTo: temporary)
+    let baseID = try Base.ID("company-a")
+    let provenance = try CompositionPageProvenance(
+        compositionID: Base.Composition.ID("shared"),
+        generation: 7,
+        baseIDs: [baseID],
+        origins: [.source(baseID)]
+    )
+    let page = try QueryRowPage(
+        columns: [QueryColumn(number: 0, name: "name")],
+        rows: [QueryRow(values: [.string("Alice")])],
+        continuation: nil,
+        provenance: provenance,
+        consistency: .federated([
+            try DomainReadPoint(
+                domainID: "primary",
+                position: .opaque(ByteString([1, 2, 3]))
+            ),
+        ])
+    )
+    let renderer = ResultRenderer(
+        output: OutputWriter(
+            resultHandle: handle,
+            diagnosticHandle: FileHandle.nullDevice
+        )
+    )
+
+    let rendered = try renderer.renderQuery(.rows(page), format: .jsonl)
+    try handle.close()
+    let output = try String(contentsOf: temporary, encoding: .utf8)
+    try FileManager.default.removeItem(at: temporary)
+
+    #expect(rendered.elementCount == 1)
+    #expect(output.contains("\"$provenance\""))
+    #expect(output.contains("\"composition\":\"shared\""))
+    #expect(output.contains("\"base\":\"company-a\""))
+    #expect(output.contains("\"$consistency\""))
+    #expect(output.contains("\"type\":\"federated\""))
 }

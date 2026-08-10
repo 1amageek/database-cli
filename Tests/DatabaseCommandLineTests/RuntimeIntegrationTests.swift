@@ -1,5 +1,5 @@
 import DatabaseClient
-import DatabaseEngine
+@_spi(Testing) import DatabaseEngine
 import DatabaseKit
 import DatabaseRuntime
 @testable import DatabaseServer
@@ -9,7 +9,6 @@ import DatabaseTypes
 import Foundation
 import SQLiteStorage
 import StorageKit
-import StorageKitSystemClock
 import Testing
 @testable import DatabaseCommandLine
 
@@ -33,39 +32,60 @@ struct RuntimeIntegrationTests {
     func executesEveryRuntimeOperationFamily() async throws {
         try await withRuntime(backend: .inMemory) { executor, outputURL in
             try await executor.execute(try parse(["capabilities"]))
+            try await executor.execute(try parse(["base", "list"]))
+            try await executor.execute(try parse([
+                "base", "describe", runtimeBaseID,
+            ]))
+            try await executor.execute(try parse([
+                "composition", "create", "cli-composition",
+                "--base", runtimeBaseID,
+                "--expected-revision", "0",
+                "--idempotency-key", "create-cli-composition",
+            ]))
+            try await executor.execute(try parse([
+                "grant", "effective",
+                "--base", runtimeBaseID,
+                "--principal", runtimePrincipalID,
+            ]))
             try await insertEntity(executor)
             try await queryEntity(executor)
             try await executor.execute(try parse([
                 "graph", "page-rank", "--index", "relationships",
+                "--base", runtimeBaseID,
             ]))
             try await executor.execute(try parse([
-                "ontology", "describe", "world",
+                "ontology", "describe", "world", "--base", runtimeBaseID,
             ]))
             try await executor.execute(try parse([
-                "shacl", "describe", "urn:shapes",
+                "shacl", "describe", "urn:shapes", "--base", runtimeBaseID,
             ]))
             try await executor.execute(try parse([
                 "command", "run", "cli.echo", emptyObject,
+                "--base", runtimeBaseID,
             ]))
             try await executor.execute(try parse([
-                "maintenance", "compact",
+                "maintenance", "compact", "--base", runtimeBaseID,
             ]))
             try await executor.execute(try parse([
                 "command", "run", "cli.echo", emptyObject,
                 "--as-job", RuntimeServices.jobKind,
                 "--idempotency-key", "runtime-job-start",
+                "--base", runtimeBaseID,
             ]))
             try await executor.execute(try parse([
                 "job", "status", RuntimeServices.jobIdentifier,
                 "commandExecute", RuntimeServices.jobKind,
+                "--base", runtimeBaseID,
             ]))
             try await executor.execute(try parse([
                 "job", "result", RuntimeServices.jobIdentifier,
                 "commandExecute", RuntimeServices.jobKind,
+                "--base", runtimeBaseID,
             ]))
             try await executor.execute(try parse([
                 "job", "cancel", RuntimeServices.jobIdentifier,
                 "commandExecute", RuntimeServices.jobKind,
+                "--base", runtimeBaseID,
             ]))
 
             let output = try String(contentsOf: outputURL, encoding: .utf8)
@@ -99,17 +119,25 @@ struct RuntimeIntegrationTests {
             entityFields,
             "--must-not-exist",
             "--idempotency-key", "insert-runtime-entity",
+            "--base", runtimeBaseID,
         ]))
     }
 
     private func queryEntity(_ executor: RemoteCommandExecutor) async throws {
         try await executor.execute(try parse([
             "query", "sql", "SELECT * FROM CLIRuntimeEntity",
+            "--base", runtimeBaseID,
         ]))
     }
 
     private func parse(_ arguments: [String]) throws -> ParsedCommand {
-        try CommandParser().parse(arguments + ["--output", "jsonl"])
+        let parser = CommandParser()
+        let parsed = try parser.parse(arguments)
+        guard let command = parser.catalog.command(for: parsed.path),
+              command.option(named: "output") != nil else {
+            return parsed
+        }
+        return try parser.parse(arguments + ["--output", "jsonl"])
     }
 
     private func withRuntime(
@@ -182,21 +210,45 @@ struct RuntimeIntegrationTests {
     private func makeContainer(
         backend: RuntimeBackend
     ) async throws -> DBContainer {
-        let configuration: DBConfiguration
+        let engine: any StorageEngine
         switch backend {
         case .inMemory:
-            configuration = DBConfiguration(
-                storageEngine: InMemoryEngine(),
-                monotonicClock: SystemStorageClock(),
-                wallClock: RealtimeDatabaseWallClock()
-            )
+            engine = InMemoryEngine()
         case .sqlite:
-            configuration = DBConfiguration(
-                storageEngine: try SQLiteStorageEngine(configuration: .inMemory),
-                monotonicClock: SystemStorageClock(),
-                wallClock: RealtimeDatabaseWallClock()
-            )
+            engine = try SQLiteStorageEngine(configuration: .inMemory)
         }
+        let domainID = try DatabaseStorageDomain.ID("cli-primary")
+        let placementID = try Base.Placement.ID("cli-default")
+        let topology = try DatabaseStorageTopology(
+            controlDomainID: domainID,
+            domains: [
+                try DatabaseStorageDomain(
+                    id: domainID,
+                    namespacePath: ["database", "cli-runtime"],
+                    storageEngine: engine
+                ),
+            ],
+            placements: [
+                try DatabaseStoragePlacement(
+                    id: placementID,
+                    domainID: domainID,
+                    path: ["bases"]
+                ),
+            ],
+            defaultPlacementID: placementID
+        )
+        let principal = Principal(
+            identifier: runtimePrincipalID,
+            roles: ["cli-test"]
+        )
+        let configuration = DBConfiguration(
+            testingName: "database-cli-runtime",
+            storageTopology: topology,
+            monotonicClock: RuntimeIntegrationClock(),
+            wallClock: RealtimeDatabaseWallClock(),
+            testingBaseID: try Base.ID(runtimeBaseID),
+            testingPrincipal: principal
+        )
         return try await DBContainer.open(
             for: try Schema(
                 entities: [try CLIRuntimeEntity.schemaEntity],
@@ -210,13 +262,43 @@ struct RuntimeIntegrationTests {
                     ),
                 ]
             ),
-            security: .disabled
+            security: .disabledForTesting
         )
     }
 }
 
 private let emptyObject = #"{"$type":"object","value":{}}"#
 private let entityFields = #"{"$type":"object","value":{"id":{"$type":"string","value":"runtime-entity"},"priority":{"$type":"int64","value":"7"},"title":{"$type":"string","value":"runtime-title"}}}"#
+private let runtimeBaseID = "cli-runtime"
+private let runtimePrincipalID = "cli-test"
+
+/// A monotonic clock with intentionally slower virtual time for integration
+/// tests that exercise operation routing rather than timeout behavior. Sleep
+/// scales by the inverse factor, so the clock contract remains coherent.
+private struct RuntimeIntegrationClock: StorageMonotonicClock {
+    private static let clock = ContinuousClock()
+    private static let scale: Int = 100
+    private let origin = Self.clock.now
+
+    var now: StorageInstant {
+        StorageInstant(
+            durationSinceReference: origin.duration(to: Self.clock.now)
+                / Self.scale
+        )
+    }
+
+    func sleep(
+        until deadline: StorageInstant
+    ) async throws(StorageClockError) {
+        let remaining = now.duration(to: deadline)
+        guard remaining > .zero else { return }
+        do {
+            try await Self.clock.sleep(for: remaining * Self.scale)
+        } catch {
+            throw .cancelled
+        }
+    }
+}
 
 private final class RuntimeTransport: DatabaseTransport, Sendable {
     private let runtime: DatabaseServerRuntime
@@ -232,7 +314,12 @@ private final class RuntimeTransport: DatabaseTransport, Sendable {
             return try await runtime.execute(
                 request,
                 context: DatabaseRequestExecutionContext(
-                    authorization: .anonymous
+                    authorization: .authenticated(
+                        Principal(
+                            identifier: runtimePrincipalID,
+                            roles: ["cli-test"]
+                        )
+                    )
                 )
             )
         } catch is CancellationError {
@@ -312,7 +399,20 @@ private struct RuntimeServices:
             kind: Self.jobKind
         )
         self.jobOperations = [operation]
-        self.job = JobIdentity(jobID: identifier, operation: operation)
+        self.job = JobIdentity(
+            jobID: identifier,
+            operation: operation,
+            target: .base(try Base.ID(runtimeBaseID))
+        )
+    }
+
+    func baseAdmission(
+        for operation: JobOperationIdentifier
+    ) throws -> DatabaseBaseAdmissionKind {
+        guard operation == job.operation else {
+            throw RuntimeFixtureError.jobOperationMismatch
+        }
+        return .activeData
     }
 
     func execute(
@@ -435,7 +535,10 @@ private struct RuntimeServices:
         let payload = try operation.encodeCompletedResponse(
             .read(output: .string("job-result"), continuation: nil)
         )
-        var accumulator = JobResultDigestAccumulator(operation: job.operation)
+        var accumulator = JobResultDigestAccumulator(
+            operation: job.operation,
+            target: job.target
+        )
         accumulator.update(payload)
         return .succeeded(
             job: job,

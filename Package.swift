@@ -15,11 +15,11 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-kit.git",
-            from: "26.0809.4"
+            from: "26.0809.8"
         ),
         .package(
             url: "https://github.com/1amageek/database-client.git",
-            from: "26.0809.0"
+            from: "26.0809.1"
         ),
         .package(
             url: "https://github.com/1amageek/storage-kit.git",
@@ -31,7 +31,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-framework.git",
-            from: "26.0809.1"
+            from: "26.0809.3"
         ),
         .package(
             url: "https://github.com/apple/swift-nio.git",

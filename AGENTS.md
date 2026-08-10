@@ -29,7 +29,7 @@
 - Use `scripts/xcode-test-harness` with the pinned Swift snapshot and an
   external timeout. The harness must report exact counts and zero skips,
   expected failures, runtime warnings, or internal tool errors. The reviewed
-  contract is 48 logical tests.
+  contract is 53 logical tests.
 - Use `scripts/process-test-harness` with adjacent, version-matched
   `database`, `database-fdb`, and `database-server` executables. It owns a
   disposable `DATABASE_CLI_CONFIG_HOME`, profile, Keychain credential, and

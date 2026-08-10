@@ -13,6 +13,234 @@ struct WireRequestBuilder: Sendable {
         try ExecutionOptions(options: command.options)
     }
 
+    func operationTarget(
+        _ command: ParsedCommand
+    ) throws -> DatabaseOperationTarget {
+        if command.path.first == "query" {
+            return try readableTarget(command.options)
+        }
+        if let root = command.path.first,
+           [
+               "mutate", "entity", "graph", "ontology", "shacl",
+               "migration", "index", "maintenance",
+           ].contains(root) {
+            return .base(try requiredBaseID(command.options))
+        }
+        if command.path == ["command", "run"]
+            || command.path == ["inspect", "indexes"]
+            || command.path == ["inspect", "ontology"]
+            || command.path == ["inspect", "shapes"] {
+            return .base(try requiredBaseID(command.options))
+        }
+        switch command.path {
+        case ["base", "describe"], ["base", "retire"],
+             ["base", "activate"], ["base", "delete"],
+             ["base", "placement", "plan"],
+             ["base", "placement", "apply"]:
+            return .base(try baseID(command.positionals[0]))
+        case ["composition", "describe"], ["composition", "replace"],
+             ["composition", "delete"]:
+            return .composition(
+                try compositionID(command.positionals[0])
+            )
+        case let path where path.first == "grant" || path.first == "job":
+            return try administrativeTarget(command.options)
+        default:
+            return .database
+        }
+    }
+
+    func baseExecutionRequest(
+        _ command: ParsedCommand
+    ) throws -> BaseExecuteOperation.Request {
+        let invocation: BaseExecuteOperation.Invocation
+        switch command.path {
+        case ["base", "placements"]:
+            invocation = .placements
+        case ["base", "list"]:
+            invocation = .list
+        case ["base", "describe"]:
+            invocation = .describe
+        case ["base", "create"]:
+            let id = try baseID(command.positionals[0])
+            invocation = .create(
+                baseID: id,
+                placementID: try requiredPlacementID(command.options),
+                initialGrants: try initialGrants(
+                    command.options.values("initial-grant"),
+                    baseID: id
+                ),
+                expectedRevision: try requiredUInt64(
+                    "expected-revision",
+                    command.options
+                ),
+                idempotencyKey: try requiredIdempotencyKey(command.options)
+            )
+        case ["base", "retire"]:
+            invocation = .retire(
+                expectedRevision: try requiredUInt64(
+                    "expected-revision",
+                    command.options
+                ),
+                idempotencyKey: try requiredIdempotencyKey(command.options)
+            )
+        case ["base", "activate"]:
+            invocation = .activate(
+                expectedRevision: try requiredUInt64(
+                    "expected-revision",
+                    command.options
+                ),
+                idempotencyKey: try requiredIdempotencyKey(command.options)
+            )
+        case ["base", "delete"]:
+            invocation = .delete(
+                expectedRevision: try requiredUInt64(
+                    "expected-revision",
+                    command.options
+                ),
+                idempotencyKey: try requiredIdempotencyKey(command.options)
+            )
+        case ["base", "placement", "plan"]:
+            invocation = .placementPlan(
+                destination: try requiredPlacementID(
+                    command.options,
+                    name: "destination"
+                ),
+                expectedRevision: try requiredUInt64(
+                    "expected-revision",
+                    command.options
+                )
+            )
+        case ["base", "placement", "apply"]:
+            invocation = .placementApply(
+                destination: try requiredPlacementID(
+                    command.options,
+                    name: "destination"
+                ),
+                expectedRevision: try requiredUInt64(
+                    "expected-revision",
+                    command.options
+                ),
+                idempotencyKey: try requiredIdempotencyKey(command.options)
+            )
+        case ["base", "legacy-migration", "plan"]:
+            let id = try baseID(command.positionals[0])
+            invocation = .legacyMigrationPlan(
+                baseID: id,
+                placementID: try requiredPlacementID(command.options),
+                initialGrants: try initialGrants(
+                    command.options.values("initial-grant"),
+                    baseID: id
+                )
+            )
+        case ["base", "legacy-migration", "apply"]:
+            let id = try baseID(command.positionals[0])
+            invocation = .legacyMigrationApply(
+                baseID: id,
+                placementID: try requiredPlacementID(command.options),
+                initialGrants: try initialGrants(
+                    command.options.values("initial-grant"),
+                    baseID: id
+                ),
+                expectedLayoutFingerprint: try layoutFingerprint(
+                    command.options.value("expected-layout-fingerprint")
+                ),
+                expectedRevision: try requiredUInt64(
+                    "expected-revision",
+                    command.options
+                ),
+                idempotencyKey: try requiredIdempotencyKey(command.options)
+            )
+        default:
+            throw DatabaseCLIError(.input, "Unsupported Base command")
+        }
+        return BaseExecuteOperation.Request(invocation: invocation)
+    }
+
+    func compositionExecutionRequest(
+        _ command: ParsedCommand
+    ) throws -> CompositionExecuteOperation.Request {
+        let invocation: CompositionExecuteOperation.Invocation
+        switch command.path {
+        case ["composition", "list"]:
+            invocation = .list
+        case ["composition", "describe"]:
+            invocation = .describe
+        case ["composition", "create"]:
+            let composition = try Base.Composition(
+                id: compositionID(command.positionals[0]),
+                bases: canonicalBaseIDs(command.options.values("base"))
+            )
+            invocation = .create(
+                composition: composition,
+                expectedRevision: try requiredUInt64(
+                    "expected-revision",
+                    command.options
+                ),
+                idempotencyKey: try requiredIdempotencyKey(command.options)
+            )
+        case ["composition", "replace"]:
+            invocation = .replace(
+                bases: try canonicalBaseIDs(command.options.values("base")),
+                expectedRevision: try requiredUInt64(
+                    "expected-revision",
+                    command.options
+                ),
+                idempotencyKey: try requiredIdempotencyKey(command.options)
+            )
+        case ["composition", "delete"]:
+            invocation = .delete(
+                expectedRevision: try requiredUInt64(
+                    "expected-revision",
+                    command.options
+                ),
+                idempotencyKey: try requiredIdempotencyKey(command.options)
+            )
+        default:
+            throw DatabaseCLIError(.input, "Unsupported Composition command")
+        }
+        return CompositionExecuteOperation.Request(invocation: invocation)
+    }
+
+    func grantExecutionRequest(
+        _ command: ParsedCommand
+    ) throws -> GrantExecuteOperation.Request {
+        let invocation: GrantExecuteOperation.Invocation
+        switch command.path {
+        case ["grant", "direct"]:
+            invocation = .direct(subject: try optionalSubject(command.options))
+        case ["grant", "effective"]:
+            invocation = .effective(
+                subject: try requiredSubject(command.options)
+            )
+        case ["grant", "add"], ["grant", "revoke"]:
+            let grant = Security.Grant(
+                subject: try requiredSubject(command.options),
+                resource: try grantResource(command.options),
+                access: try access(command.options.value("access"))
+            )
+            let revision = try requiredUInt64(
+                "expected-revision",
+                command.options
+            )
+            let key = try requiredIdempotencyKey(command.options)
+            invocation = command.path.last == "add"
+                ? .grant(
+                    grant,
+                    expectedRevision: revision,
+                    idempotencyKey: key
+                )
+                : .revoke(
+                    grant,
+                    expectedRevision: revision,
+                    idempotencyKey: key
+                )
+        default:
+            throw DatabaseCLIError(.input, "Unsupported Grant command")
+        }
+        return GrantExecuteOperation.Request(invocation: invocation)
+    }
+
     func queryInput(
         language: QueryExecuteOperation.Language,
         specification: String
@@ -566,6 +794,303 @@ struct WireRequestBuilder: Sendable {
 }
 
 private extension WireRequestBuilder {
+    func readableTarget(
+        _ options: CommandOptions
+    ) throws -> DatabaseOperationTarget {
+        let base = options.value("base")
+        let composition = options.value("composition")
+        guard (base != nil) != (composition != nil) else {
+            throw DatabaseCLIError(
+                .input,
+                "Read operations require exactly one of '--base' or '--composition'"
+            )
+        }
+        if let base { return .base(try baseID(base)) }
+        return .composition(try compositionID(composition!))
+    }
+
+    func administrativeTarget(
+        _ options: CommandOptions
+    ) throws -> DatabaseOperationTarget {
+        let base = options.value("base")
+        let database = options.contains("database-target")
+        guard (base != nil) != database else {
+            throw DatabaseCLIError(
+                .input,
+                "Command requires exactly one of '--database-target' or '--base'"
+            )
+        }
+        return try base.map { .base(try baseID($0)) } ?? .database
+    }
+
+    func requiredBaseID(_ options: CommandOptions) throws -> Base.ID {
+        guard let raw = options.value("base") else {
+            throw DatabaseCLIError(.input, "Command requires '--base'")
+        }
+        return try baseID(raw)
+    }
+
+    func baseID(_ raw: String) throws -> Base.ID {
+        do {
+            return try Base.ID(raw)
+        } catch {
+            throw DatabaseCLIError(.input, "Invalid Base identifier: \(error)")
+        }
+    }
+
+    func compositionID(_ raw: String) throws -> Base.Composition.ID {
+        do {
+            return try Base.Composition.ID(raw)
+        } catch {
+            throw DatabaseCLIError(
+                .input,
+                "Invalid Composition identifier: \(error)"
+            )
+        }
+    }
+
+    func placementID(_ raw: String) throws -> Base.Placement.ID {
+        do {
+            return try Base.Placement.ID(raw)
+        } catch {
+            throw DatabaseCLIError(
+                .input,
+                "Invalid Base placement identifier: \(error)"
+            )
+        }
+    }
+
+    func requiredPlacementID(
+        _ options: CommandOptions,
+        name: String = "placement"
+    ) throws -> Base.Placement.ID {
+        guard let raw = options.value(name) else {
+            throw DatabaseCLIError(.input, "Command requires '--\(name)'")
+        }
+        return try placementID(raw)
+    }
+
+    func canonicalBaseIDs(_ values: [String]) throws -> [Base.ID] {
+        guard !values.isEmpty else {
+            throw DatabaseCLIError(
+                .input,
+                "Composition requires at least one '--base'"
+            )
+        }
+        let ids = try values.map(baseID).sorted()
+        for index in 1..<ids.count where ids[index - 1] == ids[index] {
+            throw DatabaseCLIError(
+                .input,
+                "Composition contains duplicate Base '\(ids[index].value)'"
+            )
+        }
+        return ids
+    }
+
+    func initialGrants(
+        _ values: [String],
+        baseID: Base.ID
+    ) throws -> [Security.Grant] {
+        guard !values.isEmpty else {
+            throw DatabaseCLIError(
+                .input,
+                "Base creation requires at least one '--initial-grant'"
+            )
+        }
+        var grants = try values.map { raw -> Security.Grant in
+            let parts = raw.split(
+                separator: "=",
+                maxSplits: 1,
+                omittingEmptySubsequences: false
+            )
+            guard parts.count == 2 else {
+                throw DatabaseCLIError(
+                    .input,
+                    "Initial Grant must use '<subject>=<access-list>'"
+                )
+            }
+            return Security.Grant(
+                subject: try subject(String(parts[0])),
+                resource: .base(baseID),
+                access: try access(String(parts[1]))
+            )
+        }
+        grants.sort { lhs, rhs in
+            if lhs.subject != rhs.subject {
+                return subjectPrecedes(lhs.subject, rhs.subject)
+            }
+            return lhs.access.rawValue < rhs.access.rawValue
+        }
+        for index in 1..<grants.count
+        where grants[index - 1] == grants[index] {
+            throw DatabaseCLIError(.input, "Initial Grant is duplicated")
+        }
+        guard grants.contains(where: { $0.access.contains(.administer) }) else {
+            throw DatabaseCLIError(
+                .input,
+                "Initial Grants require at least one administer permission"
+            )
+        }
+        return grants
+    }
+
+    func optionalSubject(
+        _ options: CommandOptions
+    ) throws -> Security.Subject? {
+        let principal = options.value("principal")
+        let role = options.value("role")
+        guard !(principal != nil && role != nil) else {
+            throw DatabaseCLIError(
+                .input,
+                "Grant subject options are mutually exclusive"
+            )
+        }
+        if let principal { return try subject("principal:\(principal)") }
+        if let role { return try subject("role:\(role)") }
+        return nil
+    }
+
+    func requiredSubject(
+        _ options: CommandOptions
+    ) throws -> Security.Subject {
+        guard let subject = try optionalSubject(options) else {
+            throw DatabaseCLIError(
+                .input,
+                "Command requires exactly one of '--principal' or '--role'"
+            )
+        }
+        return subject
+    }
+
+    func subject(_ raw: String) throws -> Security.Subject {
+        if raw.hasPrefix("principal:") {
+            let identifier = String(raw.dropFirst("principal:".count))
+            guard !identifier.isEmpty else {
+                throw DatabaseCLIError(.input, "Principal identifier is empty")
+            }
+            return .principal(identifier)
+        }
+        if raw.hasPrefix("role:") {
+            let identifier = String(raw.dropFirst("role:".count))
+            guard !identifier.isEmpty else {
+                throw DatabaseCLIError(.input, "Role identifier is empty")
+            }
+            return .principalRole(identifier)
+        }
+        throw DatabaseCLIError(
+            .input,
+            "Grant subject must start with 'principal:' or 'role:'"
+        )
+    }
+
+    func subjectPrecedes(
+        _ lhs: Security.Subject,
+        _ rhs: Security.Subject
+    ) -> Bool {
+        switch (lhs, rhs) {
+        case (.principal(let lhs), .principal(let rhs)),
+             (.principalRole(let lhs), .principalRole(let rhs)):
+            return lhs < rhs
+        case (.principal, .principalRole):
+            return true
+        case (.principalRole, .principal):
+            return false
+        }
+    }
+
+    func access(_ raw: String?) throws -> Security.Access {
+        guard let raw, !raw.isEmpty else {
+            throw DatabaseCLIError(.input, "Command requires '--access'")
+        }
+        var result = Security.Access()
+        var names: Set<String> = []
+        for component in raw.split(
+            separator: ",",
+            omittingEmptySubsequences: false
+        ) {
+            let name = String(component)
+            guard names.insert(name).inserted else {
+                throw DatabaseCLIError(
+                    .input,
+                    "Access permission '\(name)' is duplicated"
+                )
+            }
+            switch name {
+            case "read": result.insert(.read)
+            case "write": result.insert(.write)
+            case "administer": result.insert(.administer)
+            default:
+                throw DatabaseCLIError(
+                    .input,
+                    "Unknown access permission '\(name)'"
+                )
+            }
+        }
+        guard !result.isEmpty else {
+            throw DatabaseCLIError(.input, "Access list is empty")
+        }
+        return result
+    }
+
+    func grantResource(
+        _ options: CommandOptions
+    ) throws -> Security.Resource {
+        switch try administrativeTarget(options) {
+        case .database:
+            return .database
+        case .base(let id):
+            return .base(id)
+        case .composition:
+            throw DatabaseCLIError(
+                .internalFailure,
+                "Composition cannot own Grants"
+            )
+        }
+    }
+
+    func requiredUInt64(
+        _ name: String,
+        _ options: CommandOptions
+    ) throws -> UInt64 {
+        guard let value = try optionalUInt64(name, options) else {
+            throw DatabaseCLIError(.input, "Command requires '--\(name)'")
+        }
+        return value
+    }
+
+    func requiredIdempotencyKey(
+        _ options: CommandOptions
+    ) throws -> String {
+        guard let value = options.value("idempotency-key"), !value.isEmpty else {
+            throw DatabaseCLIError(
+                .input,
+                "Command requires '--idempotency-key'"
+            )
+        }
+        return value
+    }
+
+    func layoutFingerprint(
+        _ raw: String?
+    ) throws -> DatabaseLayoutFingerprint {
+        guard let raw else {
+            throw DatabaseCLIError(
+                .input,
+                "Command requires '--expected-layout-fingerprint'"
+            )
+        }
+        do {
+            return try DatabaseLayoutFingerprint(Base64URL.decode(raw))
+        } catch let error as DatabaseCLIError {
+            throw error
+        } catch {
+            throw DatabaseCLIError(
+                .input,
+                "Invalid layout fingerprint: \(error)"
+            )
+        }
+    }
+
     func schemaFingerprint(_ value: String) throws -> SchemaFingerprint {
         do {
             return try SchemaFingerprint(Base64URL.decode(value))

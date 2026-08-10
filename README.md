@@ -5,15 +5,15 @@ It provides one-shot commands, an explicit interactive shell, lossless typed
 input and output, bounded pagination, and a separately linked FoundationDB
 diagnostic companion.
 
-Current development version: `26.0809.1`
+Current development version: `26.0809.2`
 
 ```mermaid
 flowchart LR
     CLI["database<br/>commands and shell"] --> Client["DatabaseClient"]
     Client --> Host["database-server<br/>HTTP / WebSocket / stdio"]
-    Host --> Wire["DatabaseWire v1<br/>14 operation families"]
+    Host --> Wire["DatabaseWire v1<br/>17 operation identifiers"]
     Wire --> Runtime["DatabaseServerRuntime"]
-    Runtime --> Container["DBContainer<br/>indexes, graph, ontology"]
+    Runtime --> Container["DBContainer<br/>Base isolation and Composition reads"]
 
     CLI --> Helper["database-fdb<br/>version-matched companion"]
     Helper --> FDB["Explicit FoundationDB cluster<br/>bounded read-only diagnostics"]
@@ -150,14 +150,26 @@ database capabilities
 from a non-echo terminal prompt. A bearer token is never accepted as a command
 argument.
 
-Run a query and a mutation:
+Create the first Base, then run a query and a mutation against it:
 
 ```bash
-database query sql 'SELECT * FROM Person' --page-size 100
-database query sparql @query.rq --output jsonl
+database base create main \
+  --placement default \
+  --initial-grant role:admin=read,write,administer \
+  --expected-revision 0 \
+  --idempotency-key create-main
+
+database query sql 'SELECT * FROM Person' --base main --page-size 100
+database query sparql @query.rq --base main --output jsonl
 database mutate sparql @update.ru \
+  --base main \
   --idempotency-key update-2026-08-08
 ```
+
+`--page-size 100` sets `QueryExecuteOperation.Request.page.limit` to 100. It
+does not rewrite the SQL statement, add `LIMIT 100`, or change which rows the
+query logically selects. The server may return at most one page for the
+invocation and emits a detached continuation when more results remain.
 
 All structured inputs accept inline lossless typed JSON, `@path`, or `@-` for
 a bounded standard-input read.
@@ -172,6 +184,12 @@ database
 ├── open
 ├── serve
 ├── schema list|show|plan|apply
+├── base
+│   ├── placements|list|describe|create|retire|activate|delete
+│   ├── placement plan|apply
+│   └── legacy-migration plan|apply
+├── composition list|describe|create|replace|delete
+├── grant direct|effective|add|revoke
 ├── query sql|sparql
 ├── mutate sql|sparql
 ├── entity insert|update|upsert|delete|apply
@@ -205,10 +223,32 @@ that support resumable execution accept `--as-job <kind>` only when the server
 advertises that exact operation family and job kind. `job wait` performs
 deadline-bounded status polling; it is not a separate wire operation.
 
-`schema plan` and `schema apply` use the fourteenth operation,
-`schemaExecute`. Apply requires the expected current fingerprint and an
+`schema plan` and `schema apply` use `schemaExecute`. Apply requires the
+expected current fingerprint and an
 idempotency key. A successful apply publishes one immutable runtime generation;
 in-flight requests retain their old generation lease.
+
+### Operation targets
+
+Every remote request carries exactly one `DatabaseOperationTarget`; there is no
+implicit or default Base.
+
+| Command kind | Target selection |
+|---|---|
+| Database control (`capabilities`, schema, Base/Composition catalog) | Database target is selected by the command |
+| Query | Exactly one of `--base <id>` or `--composition <id>` |
+| Mutation, graph, ontology, SHACL, application command, maintenance | `--base <id>` is required |
+| Grant and job commands | Exactly one of `--database-target` or `--base <id>` |
+
+Graph algorithms also use `--target` for a destination vertex. That option is
+part of the graph algorithm request and is unrelated to the DatabaseWire
+operation target.
+
+Composition rows and RDF quads include `$provenance` in JSON/JSONL output.
+The CLI consumes the retained value iterator and provenance iterator together,
+without materializing the page. N-Quads output is rejected for Composition
+results because the N-Quads format cannot preserve the required origin. Each
+page also reports its transactional or federated `$consistency` read points.
 
 `doctor` is strictly read-only. It reports installation/configuration,
 credential availability, DNS resolution, TCP connectivity, TLS validation,
@@ -216,8 +256,9 @@ authenticated protocol negotiation, and schema readability as separate
 `pass`, `warn`, `fail`, or `skipped` checks with remediation text. It never
 renders or transmits a credential during the DNS/TCP/TLS-only probes.
 
-See [Command contract](Documentation/Commands.md) for positional arguments,
-family mapping, and operation-specific options.
+See the complete [Command reference](Documentation/Commands.md) for every
+command's purpose, input contract, Wire operation, output, persistent effects,
+applicable options, and principal failure behavior.
 
 ## Connection and authentication
 
@@ -255,9 +296,10 @@ has TLS and a complete database/tenant/workspace routing identity.
 
 ## Request metadata and execution budgets
 
+Commands advertise only options consumed by their implementation.
 `--trace-id` and `--idempotency-key` are copied directly into
-`OperationRequestMetadata`. The five `ExecutionBudget` fields are exposed
-one-to-one:
+`OperationRequestMetadata`. Operations with an `ExecutionBudget` expose its
+five fields one-to-one:
 
 | Option | Default |
 |---|---:|
@@ -273,18 +315,20 @@ never converted into empty success.
 
 ## Paging and continuations
 
-The default page size is 1,000 rows and the default invocation fetches one
-page. A continuation is emitted as unpadded base64url and can be supplied to a
-later invocation:
+For operations whose request owns a page limit, the default page size is 1,000
+result elements and the default invocation fetches one page. This transport
+page size is independent of SQL `LIMIT`, SPARQL solution modifiers, graph
+algorithm bounds, and execution-budget row limits. A continuation is emitted
+as unpadded base64url and can be supplied to a later invocation:
 
 ```bash
-database query sql @query.sql --continuation <base64url>
+database query sql @query.sql --base main --continuation <base64url>
 ```
 
 Fetching every page requires all three aggregate safety limits:
 
 ```bash
-database query sql @query.sql --all \
+database query sql @query.sql --base main --all \
   --max-total-rows 100000 \
   --max-total-bytes 67108864 \
   --max-pages 100
@@ -319,8 +363,10 @@ for the complete representation contract.
 
 ## Output contract
 
-TTY output defaults to `table`; redirected output defaults to lossless `jsonl`.
-Use `--output table|jsonl|json|csv|nquads` to fix a format.
+Streamable result commands advertise `--output`; TTY output defaults to
+`table` and redirected output defaults to lossless `jsonl`. Fixed metadata and
+mutation summaries use canonical JSON and do not accept an ignored output
+option. Use a command's exact help to see its supported formats.
 
 | Stream or format | Contract |
 |---|---|
@@ -344,6 +390,8 @@ database shell
 ```
 
 The shell uses the same command parser and executor as one-shot invocations.
+Profile, output, and page-size defaults are injected only when the selected
+command declares the corresponding option.
 `query sql`, `query sparql`, `mutate sql`, and `mutate sparql` enter multiline
 mode when no statement is supplied. A semicolon does not execute a buffer;
 use `\g` explicitly.
@@ -351,6 +399,8 @@ use `\g` explicitly.
 ```text
 \help
 \profile <name>
+\base <id>
+\composition <id>
 \output table|jsonl|json|csv|nquads
 \timing on|off
 \budget
@@ -366,6 +416,10 @@ use `\g` explicitly.
 `\next` replays the immediately preceding request with its detached
 continuation. The shell does not keep a server-side transaction alive and does
 not provide `begin`, `commit`, or `rollback` commands.
+
+Statement modes have no implicit Base. `\base <id>` selects one Base for reads
+and mutations; `\composition <id>` selects a read-only Composition. The prompt
+always displays the selected target, and switching profiles clears it.
 
 History is memory-only by default. `--persist-history` enables a mode-`0600`
 history file; authentication commands are never recorded. Ctrl-C cancels the
@@ -384,7 +438,9 @@ database fdb cluster start --path /tmp/database-test \
   --minimum-available-space-ratio 0.0
 database fdb cluster status --path /srv/database
 database fdb catalog list \
-  --cluster-file /srv/database/.database/fdb.cluster
+  --cluster-file /srv/database/.database/fdb.cluster \
+  --control-namespace database \
+  --control-namespace main
 database fdb raw get \
   --cluster-file /srv/database/.database/fdb.cluster \
   --key-hex 01636174616c6f67 \
@@ -400,6 +456,11 @@ database fdb cluster stop --path /srv/database
 Raw keys require exactly one of `--key-hex`, `--key-utf8`, or `--key-tuple`.
 Range reads require both row and total-byte limits. Raw write, delete, and clear
 commands do not exist.
+
+Catalog reads require the control-domain namespace explicitly, one
+`--control-namespace` option per ordered path component. The helper resolves
+that exact existing namespace and never reads the legacy global root or creates
+a missing namespace.
 
 An explicit missing or unreachable cluster file is a typed failure. The helper
 never falls back to the system default cluster. Readiness requires a real
@@ -447,7 +508,7 @@ scripts/xcode-test-harness
 
 The harness resolves URL dependencies without using Xcode's shared repository
 cache, builds once, injects the matching Swift Testing runtime, and runs the
-generated `.xctestrun` without rebuilding. The reviewed contract is 48 logical
+generated `.xctestrun` without rebuilding. The reviewed contract is 53 logical
 tests, zero failures, zero skips, zero expected failures, zero runtime warnings,
 and no internal tool errors.
 

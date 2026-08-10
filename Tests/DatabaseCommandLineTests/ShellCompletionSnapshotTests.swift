@@ -14,6 +14,8 @@ struct ShellCompletionSnapshotTests {
         )
 
         #expect(snapshot.values(in: "").contains("schema"))
+        #expect(snapshot.values(in: "").contains("\\base"))
+        #expect(snapshot.values(in: "").contains("\\composition"))
         #expect(snapshot.values(in: "schema ").contains("show"))
         #expect(snapshot.values(in: "\\profile ") == ["production", "staging"])
         #expect(snapshot.values(in: "schema show --profile ") == [
