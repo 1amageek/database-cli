@@ -5,22 +5,23 @@ It provides one-shot commands, an explicit interactive shell, lossless typed
 input and output, bounded pagination, and a separately linked FoundationDB
 diagnostic companion.
 
-Current development version: `26.0809.2`
+Current development version: `26.0812.0`
 
 ```mermaid
 flowchart LR
     CLI["database<br/>commands and shell"] --> Client["DatabaseClient"]
     Client --> Host["database-server<br/>HTTP / WebSocket / stdio"]
     Host --> Wire["DatabaseWire v1<br/>17 operation identifiers"]
-    Wire --> Runtime["DatabaseServerRuntime"]
-    Runtime --> Container["DBContainer<br/>Base isolation and Composition reads"]
+    Wire --> Runtime["DatabaseOperationRuntime"]
+    Runtime --> Container["DBContainer<br/>database data root"]
+    Container -. "MultipleBases trait" .-> Bases["Base isolation<br/>Composition reads"]
 
     CLI --> Helper["database-fdb<br/>version-matched companion"]
     Helper --> FDB["Explicit FoundationDB cluster<br/>bounded read-only diagnostics"]
 ```
 
 The main `database` executable never imports or links a storage backend. Remote
-commands always pass through the authenticated server runtime. FoundationDB
+commands always pass through the authenticated DatabaseWire host. FoundationDB
 lifecycle and read-only inspection are isolated in the adjacent
 `database-fdb` executable.
 
@@ -150,7 +151,17 @@ database capabilities
 from a non-echo terminal prompt. A bearer token is never accepted as a command
 argument.
 
-Create the first Base, then run a query and a mutation against it:
+The standard server exposes one database data root, so data commands require no
+Base setup:
+
+```bash
+database query sql 'SELECT * FROM Person' --page-size 100
+database query sparql @query.rq --output jsonl
+database mutate sparql @update.ru --idempotency-key update-2026-08-08
+```
+
+When the server advertises the non-default `MultipleBases` capability, create a
+Base and select it explicitly:
 
 ```bash
 database base create main \
@@ -230,15 +241,16 @@ in-flight requests retain their old generation lease.
 
 ### Operation targets
 
-Every remote request carries exactly one `DatabaseOperationTarget`; there is no
-implicit or default Base.
+Every remote request carries exactly one `DatabaseOperationTarget`. The default
+data target is the database data root; no implicit or default Base exists.
 
 | Command kind | Target selection |
 |---|---|
-| Database control (`capabilities`, schema, Base/Composition catalog) | Database target is selected by the command |
-| Query | Exactly one of `--base <id>` or `--composition <id>` |
-| Mutation, graph, ontology, SHACL, application command, maintenance | `--base <id>` is required |
-| Grant and job commands | Exactly one of `--database-target` or `--base <id>` |
+| Database control (`capabilities`, schema) | Database target is selected by the command |
+| Query | Database by default; optional `--base <id>` or read-only `--composition <id>` |
+| Mutation, graph, ontology, SHACL, application command, maintenance | Database by default; optional `--base <id>` |
+| Grant and job commands | Database by default; optional `--base <id>` |
+| Base/Composition catalog | Available only when the server advertises `base.execute` / `composition.execute` |
 
 Graph algorithms also use `--target` for a destination vertex. That option is
 part of the graph algorithm request and is unrelated to the DatabaseWire
@@ -399,6 +411,7 @@ use `\g` explicitly.
 ```text
 \help
 \profile <name>
+\database
 \base <id>
 \composition <id>
 \output table|jsonl|json|csv|nquads
@@ -417,9 +430,11 @@ use `\g` explicitly.
 continuation. The shell does not keep a server-side transaction alive and does
 not provide `begin`, `commit`, or `rollback` commands.
 
-Statement modes have no implicit Base. `\base <id>` selects one Base for reads
-and mutations; `\composition <id>` selects a read-only Composition. The prompt
-always displays the selected target, and switching profiles clears it.
+Statement modes target the database data root by default. `\base <id>` selects
+one Base for reads and mutations; `\composition <id>` selects a read-only
+Composition; `\database` returns to the database data root. The prompt always
+displays the selected target, and switching profiles returns to the database
+target.
 
 History is memory-only by default. `--persist-history` enables a mode-`0600`
 history file; authentication commands are never recorded. Ctrl-C cancels the
@@ -508,7 +523,7 @@ scripts/xcode-test-harness
 
 The harness resolves URL dependencies without using Xcode's shared repository
 cache, builds once, injects the matching Swift Testing runtime, and runs the
-generated `.xctestrun` without rebuilding. The reviewed contract is 53 logical
+generated `.xctestrun` without rebuilding. The reviewed contract is 62 logical
 tests, zero failures, zero skips, zero expected failures, zero runtime warnings,
 and no internal tool errors.
 

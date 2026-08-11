@@ -20,7 +20,8 @@ errors. Dependency checkout bypasses Xcode's shared repository cache so a
 newly published package revision cannot be resolved from stale tag metadata
 without its commit tree. Local path dependencies are rejected unless
 `DATABASE_CLI_ALLOW_LOCAL_DEPENDENCIES=1` is explicitly set for diagnosis.
-The reviewed CLI contract is 53 logical tests.
+The reviewed CLI contract is 62 logical tests: 55 core CLI tests and 7 FDB
+companion tests.
 
 Executable contracts use:
 

@@ -208,8 +208,7 @@ private extension CommandCatalog {
                     .value(
                         "base",
                         "id",
-                        summary: "Execute against one Base.",
-                        required: true
+                        summary: "Execute against one Base instead of the database."
                     )
                 )
             }
@@ -528,18 +527,17 @@ private extension CommandCatalog {
             .value("principal", "id", summary: "Select a principal subject.", conflictsWith: ["role"]),
             .value("role", "id", summary: "Select a principal-role subject.", conflictsWith: ["principal"]),
         ]
-        let grantTargetRequirement: [Set<String>] = [["base", "database-target"]]
         let grantSubjectRequirement: Set<String> = ["principal", "role"]
-        add(["grant", "direct"], 0...0, usage: "--database-target|--base <base>", summary: "List direct Grants, optionally for one subject.", options: remoteOptions(specific: grantTargetOptions + grantSubjectOptions), requiredAnyOf: grantTargetRequirement, capability: "grant.execute")
-        add(["grant", "effective"], 0...0, usage: "--database-target|--base <base> --principal <id>|--role <id>", summary: "Resolve effective access and contributing Grants.", options: remoteOptions(specific: grantTargetOptions + grantSubjectOptions), requiredAnyOf: grantTargetRequirement + [grantSubjectRequirement], capability: "grant.execute")
+        add(["grant", "direct"], 0...0, usage: "[--base <base>] [--principal <id>|--role <id>]", summary: "List direct Grants; the database is the default target.", options: remoteOptions(specific: grantTargetOptions + grantSubjectOptions), capability: "grant.execute")
+        add(["grant", "effective"], 0...0, usage: "[--base <base>]", summary: "Resolve the authenticated principal's effective access; the database is the default target.", options: remoteOptions(specific: grantTargetOptions), capability: "grant.execute")
         for action in ["add", "revoke"] {
-            add(["grant", action], 0...0, usage: "--database-target|--base <base> --principal <id>|--role <id> --access <list>", summary: "\(action.capitalized) one persisted Grant.", options: remoteOptions(
+            add(["grant", action], 0...0, usage: "[--base <base>] --principal <id>|--role <id> --access <list>", summary: "\(action.capitalized) one persisted Grant; the database is the default target.", options: remoteOptions(
                 specific: grantTargetOptions + grantSubjectOptions + [
                     .value("access", "read,write,administer", summary: "Select independent access bits.", required: true),
                     expectedRevision,
                 ],
                 requiredIdempotencyKey: true
-            ), requiredAnyOf: grantTargetRequirement + [grantSubjectRequirement], capability: "grant.execute")
+            ), requiredAnyOf: [grantSubjectRequirement], capability: "grant.execute")
         }
 
         for language in ["sql", "sparql"] {
@@ -553,7 +551,7 @@ private extension CommandCatalog {
                 graphPartitions: true,
                 job: true,
                 readableTarget: true
-            ), requiredAnyOf: [["base", "composition"]], capability: "query.execute")
+            ), capability: "query.execute")
             add(["mutate", language], 1...1, usage: "<statement|@path|@->", summary: "Execute a mutating \(language.uppercased()) statement.", options: remoteOptions(
                 budget: true,
                 parameters: true,
@@ -771,14 +769,13 @@ private extension CommandCatalog {
         add(["maintenance", "compact"], 0...0, usage: "", summary: "Request backend storage compaction.", options: maintenanceOptions(resumable: true), capability: "maintenance.execute")
 
         let jobIdentityUsage = "<job-id> <family> <kind>"
-        let jobTargetRequirement: [Set<String>] = [["base", "database-target"]]
-        add(["job", "status"], 3...3, usage: jobIdentityUsage, summary: "Read persistent job state and progress.", options: remoteOptions(jobTarget: true), requiredAnyOf: jobTargetRequirement, capability: "job.status")
+        add(["job", "status"], 3...3, usage: jobIdentityUsage, summary: "Read persistent job state and progress; the database is the default target.", options: remoteOptions(jobTarget: true), capability: "job.status")
         add(["job", "wait"], 3...3, usage: jobIdentityUsage, summary: "Poll job status until a terminal state or client deadline.", options: remoteOptions(specific: [
             .value("poll-interval-milliseconds", "milliseconds", summary: "Set the status polling interval.", defaultValue: "500"),
             .value("wait-timeout-milliseconds", "milliseconds", summary: "Bound client-side waiting.", defaultValue: "30000"),
-        ], jobTarget: true), requiredAnyOf: jobTargetRequirement, capability: "job.wait")
-        add(["job", "result"], 3...3, usage: jobIdentityUsage, summary: "Read the typed result of a completed job.", options: remoteOptions(outputFormats: "table|jsonl|json|csv|nquads", jobTarget: true), requiredAnyOf: jobTargetRequirement, capability: "job.result")
-        add(["job", "cancel"], 3...3, usage: jobIdentityUsage, summary: "Request persistent job cancellation.", options: remoteOptions(jobTarget: true), requiredAnyOf: jobTargetRequirement, capability: "job.cancel")
+        ], jobTarget: true), capability: "job.wait")
+        add(["job", "result"], 3...3, usage: jobIdentityUsage, summary: "Read the typed result of a completed job; the database is the default target.", options: remoteOptions(outputFormats: "table|jsonl|json|csv|nquads", jobTarget: true), capability: "job.result")
+        add(["job", "cancel"], 3...3, usage: jobIdentityUsage, summary: "Request persistent job cancellation; the database is the default target.", options: remoteOptions(jobTarget: true), capability: "job.cancel")
 
         add(["inspect", "overview"], 0...0, usage: "", summary: "Combine advertised capabilities and schema metadata.", options: remoteOptions())
         add(["inspect", "entities"], 0...1, usage: "[entity]", summary: "Inspect all schema entities or one named entity.", options: remoteOptions())

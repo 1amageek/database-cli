@@ -106,11 +106,11 @@ exec > >(tee "$log_path") 2>&1
 
   status="$(run_and_capture version "$DATABASE" --version)"
   [[ "$status" == "0" ]]
-  [[ "$(tr -d '\n' <"$WORK_ROOT/version.stdout")" == "26.0809.2" ]]
+  [[ "$(tr -d '\n' <"$WORK_ROOT/version.stdout")" == "26.0812.0" ]]
 
   status="$(run_and_capture delegated-version "$DATABASE" fdb --version)"
   [[ "$status" == "0" ]]
-  [[ "$(tr -d '\n' <"$WORK_ROOT/delegated-version.stdout")" == "26.0809.2" ]]
+  [[ "$(tr -d '\n' <"$WORK_ROOT/delegated-version.stdout")" == "26.0812.0" ]]
   [[ ! -s "$WORK_ROOT/delegated-version.stderr" ]]
 
   status="$(run_and_capture helper-invalid "$DATABASE" fdb invalid command)"

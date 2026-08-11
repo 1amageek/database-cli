@@ -38,13 +38,13 @@ private let operationFixtures: [OperationFixture] = [
     ),
     .init(arguments: ["base", "describe", "company-a"], operation: .baseExecute, target: .base("company-a")),
     .init(arguments: ["composition", "describe", "shared"], operation: .compositionExecute, target: .composition("shared")),
-    .init(arguments: ["grant", "effective", "--base", "company-a", "--principal", "alice"], operation: .grantExecute, target: .base("company-a")),
+    .init(arguments: ["grant", "effective", "--base", "company-a"], operation: .grantExecute, target: .base("company-a")),
     .init(arguments: ["inspect", "entities"], operation: .schemaDescribe, target: .database),
     .init(arguments: ["inspect", "graph"], operation: .schemaDescribe, target: .database),
     .init(arguments: ["inspect", "jobs"], operation: .capabilitiesDescribe, target: .database),
     .init(arguments: ["inspect", "ontology", "world", "--base", "company-a"], operation: .ontologyExecute, target: .base("company-a")),
     .init(arguments: ["inspect", "shapes", "urn:shapes", "--base", "company-a"], operation: .shaclExecute, target: .base("company-a")),
-    .init(arguments: ["query", "sql", "SELECT 1", "--base", "company-a"], operation: .queryExecute, target: .base("company-a")),
+    .init(arguments: ["query", "sql", "SELECT 1"], operation: .queryExecute, target: .database),
     .init(arguments: ["mutate", "sparql", "CLEAR DEFAULT", "--base", "company-a"], operation: .mutationExecute, target: .base("company-a")),
     .init(arguments: ["graph", "page-rank", "--index", "social", "--base", "company-a"], operation: .graphAlgorithm, target: .base("company-a")),
     .init(arguments: ["ontology", "describe", "world", "--base", "company-a"], operation: .ontologyExecute, target: .base("company-a")),
@@ -60,9 +60,9 @@ private let operationFixtures: [OperationFixture] = [
     ),
     .init(arguments: ["maintenance", "compact", "--base", "company-a"], operation: .maintenanceExecute, target: .base("company-a")),
     .init(
-        arguments: ["job", "status", jobID, "queryExecute", "query", "--base", "company-a"],
+        arguments: ["job", "status", jobID, "queryExecute", "query"],
         operation: .jobStatus,
-        target: .base("company-a")
+        target: .database
     ),
     .init(
         arguments: ["job", "result", jobID, "queryExecute", "query", "--base", "company-a"],
@@ -211,6 +211,35 @@ func grantRequestContract() throws {
     #expect(grant.access == [.read, .write])
     #expect(revision == 7)
     #expect(key == "grant-add-1")
+}
+
+@Test("Effective Grant evaluation is bound to the authenticated principal")
+func effectiveGrantRequestContract() throws {
+    let command = try CommandParser().parse([
+        "grant", "effective", "--base", "company-a",
+    ])
+    let request = try WireRequestBuilder().grantExecutionRequest(command)
+    #expect(request.invocation == .effective)
+}
+
+@Test("Data and Grant commands default to the database target")
+func commandsDefaultToDatabaseTarget() throws {
+    let parser = CommandParser()
+    let builder = WireRequestBuilder()
+    let commands = try [
+        parser.parse(["query", "sql", "SELECT 1"]),
+        parser.parse(["mutate", "sql", "DELETE FROM Person"]),
+        parser.parse(["grant", "direct"]),
+        parser.parse(["grant", "effective"]),
+        parser.parse(["job", "status", jobID, "queryExecute", "query"]),
+    ]
+    #expect(try commands.map(builder.operationTarget) == [
+        .database,
+        .database,
+        .database,
+        .database,
+        .database,
+    ])
 }
 
 @Test("Open schema applies the fingerprint returned by its immediately preceding plan")

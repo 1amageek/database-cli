@@ -24,13 +24,13 @@ struct WireRequestBuilder: Sendable {
                "mutate", "entity", "graph", "ontology", "shacl",
                "migration", "index", "maintenance",
            ].contains(root) {
-            return .base(try requiredBaseID(command.options))
+            return try dataTarget(command.options)
         }
         if command.path == ["command", "run"]
             || command.path == ["inspect", "indexes"]
             || command.path == ["inspect", "ontology"]
             || command.path == ["inspect", "shapes"] {
-            return .base(try requiredBaseID(command.options))
+            return try dataTarget(command.options)
         }
         switch command.path {
         case ["base", "describe"], ["base", "retire"],
@@ -210,9 +210,7 @@ struct WireRequestBuilder: Sendable {
         case ["grant", "direct"]:
             invocation = .direct(subject: try optionalSubject(command.options))
         case ["grant", "effective"]:
-            invocation = .effective(
-                subject: try requiredSubject(command.options)
-            )
+            invocation = .effective
         case ["grant", "add"], ["grant", "revoke"]:
             let grant = Security.Grant(
                 subject: try requiredSubject(command.options),
@@ -799,14 +797,17 @@ private extension WireRequestBuilder {
     ) throws -> DatabaseOperationTarget {
         let base = options.value("base")
         let composition = options.value("composition")
-        guard (base != nil) != (composition != nil) else {
+        guard base == nil || composition == nil else {
             throw DatabaseCLIError(
                 .input,
-                "Read operations require exactly one of '--base' or '--composition'"
+                "Read operations accept only one of '--base' or '--composition'"
             )
         }
         if let base { return .base(try baseID(base)) }
-        return .composition(try compositionID(composition!))
+        if let composition {
+            return .composition(try compositionID(composition))
+        }
+        return .database
     }
 
     func administrativeTarget(
@@ -814,20 +815,22 @@ private extension WireRequestBuilder {
     ) throws -> DatabaseOperationTarget {
         let base = options.value("base")
         let database = options.contains("database-target")
-        guard (base != nil) != database else {
+        guard base == nil || !database else {
             throw DatabaseCLIError(
                 .input,
-                "Command requires exactly one of '--database-target' or '--base'"
+                "Command accepts only one of '--database-target' or '--base'"
             )
         }
         return try base.map { .base(try baseID($0)) } ?? .database
     }
 
-    func requiredBaseID(_ options: CommandOptions) throws -> Base.ID {
+    func dataTarget(
+        _ options: CommandOptions
+    ) throws -> DatabaseOperationTarget {
         guard let raw = options.value("base") else {
-            throw DatabaseCLIError(.input, "Command requires '--base'")
+            return .database
         }
-        return try baseID(raw)
+        return .base(try baseID(raw))
     }
 
     func baseID(_ raw: String) throws -> Base.ID {

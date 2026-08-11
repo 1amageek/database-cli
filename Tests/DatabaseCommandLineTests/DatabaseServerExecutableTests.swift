@@ -8,16 +8,16 @@ struct DatabaseServerExecutableTests {
     @Test("Version validation accepts only the exact adjacent version")
     func exactVersionIsRequired() async throws {
         try await withExecutable(
-            "#!/bin/sh\nprintf '26.0809.2\\n'\n"
+            "#!/bin/sh\nprintf '26.0812.0\\n'\n"
         ) { url in
             let executable = DatabaseServerExecutable(url: url)
             try await executable.validateVersion(
-                expected: "26.0809.2",
+                expected: "26.0812.0",
                 timeout: .seconds(1)
             )
             await #expect(throws: DatabaseCLIError.self) {
                 try await executable.validateVersion(
-                    expected: "26.0809.3",
+                    expected: "26.0812.1",
                     timeout: .seconds(1)
                 )
             }
@@ -35,7 +35,7 @@ struct DatabaseServerExecutableTests {
             let executable = DatabaseServerExecutable(url: url)
             do {
                 try await executable.validateVersion(
-                    expected: "26.0809.2",
+                    expected: "26.0812.0",
                     timeout: .seconds(1)
                 )
                 Issue.record("Expected version validation to time out")

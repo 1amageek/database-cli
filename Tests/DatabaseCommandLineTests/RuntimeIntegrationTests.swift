@@ -2,10 +2,10 @@ import DatabaseClient
 @_spi(Testing) import DatabaseEngine
 import DatabaseKit
 import DatabaseRuntime
-@testable import DatabaseServer
-import DatabaseServerFoundation
+@testable import DatabaseWireRuntime
+import DatabaseFoundation
 import DatabaseTypes
-@_spi(DatabaseServer) import DatabaseWire
+@_spi(DatabaseWireRuntime) import DatabaseWire
 import Foundation
 import SQLiteStorage
 import StorageKit
@@ -28,64 +28,42 @@ private enum RuntimeBackend: String, Sendable {
 
 @Suite("CLI runtime integration", .serialized)
 struct RuntimeIntegrationTests {
-    @Test("CLI executes every operation family through DatabaseServerRuntime")
-    func executesEveryRuntimeOperationFamily() async throws {
+    @Test("CLI executes every standard operation family against the database root")
+    func executesEveryStandardRuntimeOperationFamily() async throws {
         try await withRuntime(backend: .inMemory) { executor, outputURL in
             try await executor.execute(try parse(["capabilities"]))
-            try await executor.execute(try parse(["base", "list"]))
-            try await executor.execute(try parse([
-                "base", "describe", runtimeBaseID,
-            ]))
-            try await executor.execute(try parse([
-                "composition", "create", "cli-composition",
-                "--base", runtimeBaseID,
-                "--expected-revision", "0",
-                "--idempotency-key", "create-cli-composition",
-            ]))
-            try await executor.execute(try parse([
-                "grant", "effective",
-                "--base", runtimeBaseID,
-                "--principal", runtimePrincipalID,
-            ]))
+            try await executor.execute(try parse(["grant", "effective"]))
             try await insertEntity(executor)
             try await queryEntity(executor)
             try await executor.execute(try parse([
                 "graph", "page-rank", "--index", "relationships",
-                "--base", runtimeBaseID,
             ]))
             try await executor.execute(try parse([
-                "ontology", "describe", "world", "--base", runtimeBaseID,
+                "ontology", "describe", "world",
             ]))
             try await executor.execute(try parse([
-                "shacl", "describe", "urn:shapes", "--base", runtimeBaseID,
+                "shacl", "describe", "urn:shapes",
             ]))
             try await executor.execute(try parse([
                 "command", "run", "cli.echo", emptyObject,
-                "--base", runtimeBaseID,
             ]))
-            try await executor.execute(try parse([
-                "maintenance", "compact", "--base", runtimeBaseID,
-            ]))
+            try await executor.execute(try parse(["maintenance", "compact"]))
             try await executor.execute(try parse([
                 "command", "run", "cli.echo", emptyObject,
                 "--as-job", RuntimeServices.jobKind,
                 "--idempotency-key", "runtime-job-start",
-                "--base", runtimeBaseID,
             ]))
             try await executor.execute(try parse([
                 "job", "status", RuntimeServices.jobIdentifier,
                 "commandExecute", RuntimeServices.jobKind,
-                "--base", runtimeBaseID,
             ]))
             try await executor.execute(try parse([
                 "job", "result", RuntimeServices.jobIdentifier,
                 "commandExecute", RuntimeServices.jobKind,
-                "--base", runtimeBaseID,
             ]))
             try await executor.execute(try parse([
                 "job", "cancel", RuntimeServices.jobIdentifier,
                 "commandExecute", RuntimeServices.jobKind,
-                "--base", runtimeBaseID,
             ]))
 
             let output = try String(contentsOf: outputURL, encoding: .utf8)
@@ -119,14 +97,12 @@ struct RuntimeIntegrationTests {
             entityFields,
             "--must-not-exist",
             "--idempotency-key", "insert-runtime-entity",
-            "--base", runtimeBaseID,
         ]))
     }
 
     private func queryEntity(_ executor: RemoteCommandExecutor) async throws {
         try await executor.execute(try parse([
             "query", "sql", "SELECT * FROM CLIRuntimeEntity",
-            "--base", runtimeBaseID,
         ]))
     }
 
@@ -158,11 +134,11 @@ struct RuntimeIntegrationTests {
             throw RuntimeFixtureError.outputCreationFailed
         }
         let outputHandle = try FileHandle(forWritingTo: outputURL)
-        let runtime = try await DatabaseServerRuntime(
+        let runtime = try await DatabaseOperationRuntime(
             container: container,
-            configuration: try DatabaseServerRuntimeConfiguration(
+            configuration: try DatabaseOperationRuntimeConfiguration(
                 identity: DatabaseRuntimeIdentity(version: "cli-runtime"),
-                serviceFactory: AnyDatabaseServerServiceFactory(
+                serviceFactory: AnyDatabaseOperationServiceFactory(
                     RuntimeServiceFactory()
                 ),
                 admissionPolicy: AnyDatabaseOperationAdmissionPolicy(
@@ -218,36 +194,19 @@ struct RuntimeIntegrationTests {
             engine = try SQLiteStorageEngine(configuration: .inMemory)
         }
         let domainID = try DatabaseStorageDomain.ID("cli-primary")
-        let placementID = try Base.Placement.ID("cli-default")
-        let topology = try DatabaseStorageTopology(
-            controlDomainID: domainID,
-            domains: [
-                try DatabaseStorageDomain(
-                    id: domainID,
-                    namespacePath: ["database", "cli-runtime"],
-                    storageEngine: engine
-                ),
-            ],
-            placements: [
-                try DatabaseStoragePlacement(
-                    id: placementID,
-                    domainID: domainID,
-                    path: ["bases"]
-                ),
-            ],
-            defaultPlacementID: placementID
+        let domain = try DatabaseStorageDomain(
+            id: domainID,
+            namespacePath: ["database", "cli-runtime"],
+            storageEngine: engine
         )
-        let principal = Principal(
-            identifier: runtimePrincipalID,
-            roles: ["cli-test"]
+        let topology = DatabaseStorageTopology(
+            controlDomain: domain
         )
         let configuration = DBConfiguration(
-            testingName: "database-cli-runtime",
+            name: "database-cli-runtime",
             storageTopology: topology,
             monotonicClock: RuntimeIntegrationClock(),
-            wallClock: RealtimeDatabaseWallClock(),
-            testingBaseID: try Base.ID(runtimeBaseID),
-            testingPrincipal: principal
+            wallClock: RealtimeDatabaseWallClock()
         )
         return try await DBContainer.open(
             for: try Schema(
@@ -269,7 +228,6 @@ struct RuntimeIntegrationTests {
 
 private let emptyObject = #"{"$type":"object","value":{}}"#
 private let entityFields = #"{"$type":"object","value":{"id":{"$type":"string","value":"runtime-entity"},"priority":{"$type":"int64","value":"7"},"title":{"$type":"string","value":"runtime-title"}}}"#
-private let runtimeBaseID = "cli-runtime"
 private let runtimePrincipalID = "cli-test"
 
 /// A monotonic clock with intentionally slower virtual time for integration
@@ -301,9 +259,9 @@ private struct RuntimeIntegrationClock: StorageMonotonicClock {
 }
 
 private final class RuntimeTransport: DatabaseTransport, Sendable {
-    private let runtime: DatabaseServerRuntime
+    private let runtime: DatabaseOperationRuntime
 
-    init(runtime: DatabaseServerRuntime) {
+    init(runtime: DatabaseOperationRuntime) {
         self.runtime = runtime
     }
 
@@ -317,7 +275,7 @@ private final class RuntimeTransport: DatabaseTransport, Sendable {
                     authorization: .authenticated(
                         Principal(
                             identifier: runtimePrincipalID,
-                            roles: ["cli-test"]
+                            roles: ["admin"]
                         )
                     )
                 )
@@ -331,13 +289,13 @@ private final class RuntimeTransport: DatabaseTransport, Sendable {
 }
 
 private final class RuntimeServiceFactory:
-    DatabaseServerServiceFactory,
+    DatabaseOperationServiceFactory,
     Sendable {
     func makeServices(
-        context: DatabaseServerServiceContext
-    ) async throws -> DatabaseServerServices {
+        context: DatabaseOperationServiceContext
+    ) async throws -> DatabaseOperationServices {
         let services = try RuntimeServices()
-        return DatabaseServerServices(
+        return DatabaseOperationServices(
             graphOperations: GraphOperationServices(
                 statementExecutor: CanonicalDatabaseStatementMutationExecutor(
                     runtimeLimits: context.runtimeLimits
@@ -402,7 +360,7 @@ private struct RuntimeServices:
         self.job = JobIdentity(
             jobID: identifier,
             operation: operation,
-            target: .base(try Base.ID(runtimeBaseID))
+            target: .database
         )
     }
 

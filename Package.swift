@@ -15,7 +15,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-kit.git",
-            from: "26.0809.8"
+            from: "26.0811.0"
         ),
         .package(
             url: "https://github.com/1amageek/database-client.git",
@@ -31,7 +31,10 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-framework.git",
-            from: "26.0809.3"
+            from: "26.0812.0",
+            traits: [
+                .trait(name: "AllRuntimeFeatures"),
+            ]
         ),
         .package(
             url: "https://github.com/apple/swift-nio.git",
@@ -104,8 +107,8 @@ let package = Package(
                 "DatabaseCommandLine",
                 .product(name: "DatabaseEngine", package: "database-framework"),
                 .product(name: "DatabaseRuntime", package: "database-framework"),
-                .product(name: "DatabaseServer", package: "database-framework"),
-                .product(name: "DatabaseServerFoundation", package: "database-framework"),
+                .product(name: "DatabaseWireRuntime", package: "database-framework"),
+                .product(name: "DatabaseFoundation", package: "database-framework"),
                 .product(name: "DatabaseTypes", package: "database-types"),
                 .product(name: "DatabaseKit", package: "database-kit"),
                 .product(name: "DatabaseWire", package: "database-kit"),

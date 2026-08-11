@@ -110,7 +110,7 @@ private extension ShellCompletionSnapshot {
         profiles: [String]
     ) {
         for command in [
-            "\\help", "\\profile", "\\base", "\\composition", "\\output",
+            "\\help", "\\profile", "\\database", "\\base", "\\composition", "\\output",
             "\\timing", "\\budget",
             "\\page-size", "\\next", "\\history", "\\mode", "\\g",
             "\\clear", "\\quit",

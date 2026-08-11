@@ -45,8 +45,8 @@ private let commandFixtures: [CommandFixture] = [
     .init(arguments: ["composition", "create", compositionID, "--base", baseID, "--expected-revision", "0", "--idempotency-key", "composition-create"], path: ["composition", "create"]),
     .init(arguments: ["composition", "replace", compositionID, "--base", baseID, "--expected-revision", "1", "--idempotency-key", "composition-replace"], path: ["composition", "replace"]),
     .init(arguments: ["composition", "delete", compositionID, "--expected-revision", "2", "--idempotency-key", "composition-delete"], path: ["composition", "delete"]),
-    .init(arguments: ["grant", "direct", "--database-target"], path: ["grant", "direct"]),
-    .init(arguments: ["grant", "effective", "--base", baseID, "--principal", "alice"], path: ["grant", "effective"]),
+    .init(arguments: ["grant", "direct"], path: ["grant", "direct"]),
+    .init(arguments: ["grant", "effective", "--base", baseID], path: ["grant", "effective"]),
     .init(arguments: ["grant", "add", "--base", baseID, "--principal", "alice", "--access", "read,write", "--expected-revision", "0", "--idempotency-key", "grant-add"], path: ["grant", "add"]),
     .init(arguments: ["grant", "revoke", "--base", baseID, "--principal", "alice", "--access", "write", "--expected-revision", "1", "--idempotency-key", "grant-revoke"], path: ["grant", "revoke"]),
     .init(arguments: ["query", "sql", "SELECT 1", "--base", baseID], path: ["query", "sql"]),
@@ -273,7 +273,7 @@ func requiredOptionsAreValidatedByCatalog() throws {
     #expect(throws: DatabaseCLIError.self) {
         try CommandParser().parse(["serve", "database.sqlite"])
     }
-    #expect(throws: DatabaseCLIError.self) {
+    #expect(throws: Never.self) {
         try CommandParser().parse(["query", "sql", "SELECT 1"])
     }
     #expect(throws: DatabaseCLIError.self) {
@@ -283,8 +283,13 @@ func requiredOptionsAreValidatedByCatalog() throws {
             "--composition", compositionID,
         ])
     }
-    #expect(throws: DatabaseCLIError.self) {
+    #expect(throws: Never.self) {
         try CommandParser().parse(["grant", "effective", "--database-target"])
+    }
+    #expect(throws: DatabaseCLIError.self) {
+        try CommandParser().parse([
+            "grant", "effective", "--database-target", "--principal", "alice",
+        ])
     }
     let parser = CommandParser()
     let postgreSQL = try StandaloneStorageSelection.resolve(

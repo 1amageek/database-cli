@@ -19,8 +19,8 @@ DatabaseCLIExecutable
 
 DatabaseServerExecutable
 └── DatabaseServerHost
-    ├── DatabaseServerApplication
-    ├── DatabaseServerRuntime
+    ├── DatabaseApplication
+    ├── DatabaseOperationRuntime
     ├── SQLiteStorage
     ├── PostgreSQLStorage
     └── FDBStorage

@@ -185,7 +185,7 @@ private extension DatabaseShell {
 
         var prompt: String {
             let suffix = statementLines.isEmpty ? "> " : "...> "
-            let targetLabel = target?.promptLabel ?? "target:none"
+            let targetLabel = target?.promptLabel ?? "database"
             return "\(promptConnection)/\(database) [\(targetLabel)] [\(mode.promptLabel)]\(suffix)"
         }
     }
@@ -308,6 +308,7 @@ private extension DatabaseShell {
                 """
                 \\help
                 \\profile <name>
+                \\database
                 \\base <id>
                 \\composition <id>
                 \\output table|jsonl|json|csv|nquads
@@ -337,6 +338,12 @@ private extension DatabaseShell {
             state.promptConnection = profile.name
             state.database = profile.databaseID
             state.target = nil
+        case "\\database":
+            guard tokens.count == 1 else {
+                throw DatabaseCLIError(.input, "Usage: \\database")
+            }
+            state.target = nil
+            state.statementLines.removeAll(keepingCapacity: true)
         case "\\base":
             guard tokens.count == 2 else {
                 throw DatabaseCLIError(.input, "Usage: \\base <id>")
