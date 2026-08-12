@@ -4,7 +4,7 @@ import Foundation
 import Synchronization
 
 public enum DatabaseCLIVersion {
-    public static let current = "26.0812.0"
+    public static let current = "26.0812.1"
 }
 
 public typealias RemoteSessionFactory = @Sendable (
@@ -148,7 +148,7 @@ extension DatabaseCLIApplication {
         )
         do {
             let capabilities = try await local.remoteSession.client.database.execute(
-                DatabaseOperations.capabilitiesDescribe,
+                DatabaseOperationCatalog.capabilitiesDescribe,
                 request: EmptyOperationPayload()
             )
             guard capabilities.features.contains(where: {
@@ -369,7 +369,7 @@ extension DatabaseCLIApplication {
     ) async throws {
         let manifest = try WireRequestBuilder().schemaManifest(specification)
         let planResponse = try await session.client.database.execute(
-            DatabaseOperations.schemaExecute,
+            DatabaseOperationCatalog.schemaExecute,
             request: SchemaExecuteOperation.Request(
                 invocation: .plan(
                     manifest: manifest,
@@ -392,7 +392,7 @@ extension DatabaseCLIApplication {
 
         let idempotencyKey = "database-open-\(UUID().uuidString.lowercased())"
         let applyResponse = try await session.client.database.execute(
-            DatabaseOperations.schemaExecute,
+            DatabaseOperationCatalog.schemaExecute,
             request: SchemaExecuteOperation.Request(
                 invocation: .apply(
                     manifest: manifest,

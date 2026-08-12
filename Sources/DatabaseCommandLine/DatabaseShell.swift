@@ -258,7 +258,7 @@ private extension DatabaseShell {
         let capabilities: CapabilitiesDescribeOperation.Response
         do {
             capabilities = try await activeSession.client.database.execute(
-                DatabaseOperations.capabilitiesDescribe,
+                DatabaseOperationCatalog.capabilitiesDescribe,
                 request: EmptyOperationPayload()
             )
         } catch {
@@ -278,7 +278,7 @@ private extension DatabaseShell {
         }) {
             do {
                 schema = try await activeSession.client.database.execute(
-                    DatabaseOperations.schemaDescribe,
+                    DatabaseOperationCatalog.schemaDescribe,
                     request: EmptyOperationPayload()
                 )
             } catch {

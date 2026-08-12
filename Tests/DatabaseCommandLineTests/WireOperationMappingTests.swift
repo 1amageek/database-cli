@@ -392,7 +392,7 @@ private final class OperationProbeTransport: DatabaseTransport, Sendable {
             if envelope.operation == .capabilitiesDescribe,
                let advertisedJob {
                 return try DatabaseWireEncoder().encodeResponse(
-                    DatabaseOperations.capabilitiesDescribe,
+                    DatabaseOperationCatalog.capabilitiesDescribe,
                     requestID: envelope.requestID,
                     response: CapabilitiesDescribeOperation.Response(
                         runtimeVersion: "operation-probe",
@@ -457,7 +457,7 @@ private final class OpenSchemaProbeTransport: DatabaseTransport, Sendable {
     ) async throws(DatabaseTransportError) -> ByteString {
         do {
             let decoded = try DatabaseWireDecoder().decodeRequest(
-                DatabaseOperations.schemaExecute,
+                DatabaseOperationCatalog.schemaExecute,
                 from: request
             )
             state.withLock { $0.operations.append(.schemaExecute) }
@@ -474,7 +474,7 @@ private final class OpenSchemaProbeTransport: DatabaseTransport, Sendable {
                 }
                 state.withLock { $0.plannedManifest = manifest }
                 return try DatabaseWireEncoder().encodeResponse(
-                    DatabaseOperations.schemaExecute,
+                    DatabaseOperationCatalog.schemaExecute,
                     requestID: decoded.requestID,
                     response: .plan(
                         .init(
@@ -499,7 +499,7 @@ private final class OpenSchemaProbeTransport: DatabaseTransport, Sendable {
                 }
                 let targetFingerprint = try manifest.fingerprint()
                 return try DatabaseWireEncoder().encodeResponse(
-                    DatabaseOperations.schemaExecute,
+                    DatabaseOperationCatalog.schemaExecute,
                     requestID: decoded.requestID,
                     response: .applied(
                         .init(

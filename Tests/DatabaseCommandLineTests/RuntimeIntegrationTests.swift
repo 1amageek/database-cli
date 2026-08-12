@@ -2,10 +2,11 @@ import DatabaseClient
 @_spi(Testing) import DatabaseEngine
 import DatabaseKit
 import DatabaseRuntime
-@testable import DatabaseWireRuntime
+@testable import DatabaseOperations
+import DatabaseWireAdapter
 import DatabaseFoundation
 import DatabaseTypes
-@_spi(DatabaseWireRuntime) import DatabaseWire
+@_spi(DatabaseOperations) import DatabaseWire
 import Foundation
 import SQLiteStorage
 import StorageKit
@@ -134,21 +135,20 @@ struct RuntimeIntegrationTests {
             throw RuntimeFixtureError.outputCreationFailed
         }
         let outputHandle = try FileHandle(forWritingTo: outputURL)
-        let runtime = try await DatabaseOperationRuntime(
+        let runtime = try await DatabaseOperationInstance.open(
             container: container,
-            configuration: try DatabaseOperationRuntimeConfiguration(
-                identity: DatabaseRuntimeIdentity(version: "cli-runtime"),
+            configuration: try DatabaseOperationConfiguration(
+                identity: DatabaseOperationIdentity(version: "cli-runtime"),
                 serviceFactory: AnyDatabaseOperationServiceFactory(
                     RuntimeServiceFactory()
                 ),
                 admissionPolicy: AnyDatabaseOperationAdmissionPolicy(
                     UnrestrictedDatabaseOperationAdmissionPolicy()
                 ),
-                clock: RealtimeDatabaseWallClock()
             )
         )
         let session = RemoteSession(
-            transport: AnyDatabaseTransport(RuntimeTransport(runtime: runtime)) {
+            transport: AnyDatabaseTransport(RuntimeTransport(instance: runtime)) {
                 _ in
             }
         )
@@ -164,7 +164,7 @@ struct RuntimeIntegrationTests {
             try await operation(executor, outputURL)
             await session.shutdown()
             try outputHandle.close()
-            await container.shutdown()
+            await runtime.shutdown()
             try FileManager.default.removeItem(at: outputURL)
         } catch {
             await session.shutdown()
@@ -173,7 +173,7 @@ struct RuntimeIntegrationTests {
             } catch {
                 Issue.record("Runtime output close failed: \(error)")
             }
-            await container.shutdown()
+            await runtime.shutdown()
             do {
                 try FileManager.default.removeItem(at: outputURL)
             } catch {
@@ -259,17 +259,17 @@ private struct RuntimeIntegrationClock: StorageMonotonicClock {
 }
 
 private final class RuntimeTransport: DatabaseTransport, Sendable {
-    private let runtime: DatabaseOperationRuntime
+    private let wireEndpoint: DatabaseWireEndpoint
 
-    init(runtime: DatabaseOperationRuntime) {
-        self.runtime = runtime
+    init(instance: DatabaseOperationInstance) {
+        self.wireEndpoint = DatabaseWireEndpoint(instance: instance)
     }
 
     func send(
         _ request: ByteString
     ) async throws(DatabaseTransportError) -> ByteString {
         do {
-            return try await runtime.execute(
+            return try await wireEndpoint.execute(
                 request,
                 context: DatabaseRequestExecutionContext(
                     authorization: .authenticated(
@@ -487,7 +487,7 @@ private struct RuntimeServices:
         guard request.job == job, request.continuation == nil else {
             throw RuntimeFixtureError.jobOperationMismatch
         }
-        let operation = try DatabaseOperations.commandExecute.resumableJob(
+        let operation = try DatabaseOperationCatalog.commandExecute.resumableJob(
             kind: Self.jobKind
         )
         let payload = try operation.encodeCompletedResponse(

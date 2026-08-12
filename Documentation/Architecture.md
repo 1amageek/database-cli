@@ -19,8 +19,9 @@ DatabaseCLIExecutable
 
 DatabaseServerExecutable
 └── DatabaseServerHost
-    ├── DatabaseApplication
-    ├── DatabaseOperationRuntime
+    ├── DatabaseOperationApplication
+    ├── DatabaseWireAdapter
+    ├── DatabaseOperationInstance
     ├── SQLiteStorage
     ├── PostgreSQLStorage
     └── FDBStorage
@@ -48,7 +49,7 @@ argv or shell line
         -> ResolvedConnection
             -> HTTP or WebSocket transport selected by URL scheme
                 -> DatabaseClient request identifier and wire frame
-                    -> one of 14 canonical DatabaseWire operations
+                    -> one of 17 canonical DatabaseWire operations
                         -> incremental result renderer
 ```
 

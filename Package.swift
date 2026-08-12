@@ -15,11 +15,11 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-kit.git",
-            from: "26.0811.0"
+            from: "26.0812.1"
         ),
         .package(
             url: "https://github.com/1amageek/database-client.git",
-            from: "26.0809.1"
+            from: "26.0812.0"
         ),
         .package(
             url: "https://github.com/1amageek/storage-kit.git",
@@ -31,7 +31,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-framework.git",
-            from: "26.0812.0",
+            from: "26.0812.1",
             traits: [
                 .trait(name: "AllRuntimeFeatures"),
             ]
@@ -107,7 +107,8 @@ let package = Package(
                 "DatabaseCommandLine",
                 .product(name: "DatabaseEngine", package: "database-framework"),
                 .product(name: "DatabaseRuntime", package: "database-framework"),
-                .product(name: "DatabaseWireRuntime", package: "database-framework"),
+                .product(name: "DatabaseOperations", package: "database-framework"),
+                .product(name: "DatabaseWireAdapter", package: "database-framework"),
                 .product(name: "DatabaseFoundation", package: "database-framework"),
                 .product(name: "DatabaseTypes", package: "database-types"),
                 .product(name: "DatabaseKit", package: "database-kit"),

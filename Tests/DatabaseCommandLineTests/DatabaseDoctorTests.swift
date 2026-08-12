@@ -122,7 +122,7 @@ private final class DoctorProbeTransport: DatabaseTransport, Sendable {
             switch header.operation {
             case .capabilitiesDescribe:
                 return try DatabaseWireEncoder().encodeResponse(
-                    DatabaseOperations.capabilitiesDescribe,
+                    DatabaseOperationCatalog.capabilitiesDescribe,
                     requestID: header.requestID,
                     response: CapabilitiesDescribeOperation.Response(
                         runtimeVersion: "doctor-runtime",
@@ -132,7 +132,7 @@ private final class DoctorProbeTransport: DatabaseTransport, Sendable {
                 )
             case .schemaDescribe:
                 return try DatabaseWireEncoder().encodeResponse(
-                    DatabaseOperations.schemaDescribe,
+                    DatabaseOperationCatalog.schemaDescribe,
                     requestID: header.requestID,
                     response: SchemaDescribeOperation.Response(
                         version: Schema.Version(1, 0, 0),

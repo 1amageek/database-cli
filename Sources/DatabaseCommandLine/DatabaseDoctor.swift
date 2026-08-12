@@ -243,7 +243,7 @@ extension DatabaseCLIApplication {
         }
         do {
             let capabilities = try await session.client.database.execute(
-                DatabaseOperations.capabilitiesDescribe,
+                DatabaseOperationCatalog.capabilitiesDescribe,
                 request: EmptyOperationPayload()
             )
             record(
@@ -269,7 +269,7 @@ extension DatabaseCLIApplication {
         let schemaStart = ContinuousClock.now
         do {
             let schema = try await session.client.database.execute(
-                DatabaseOperations.schemaDescribe,
+                DatabaseOperationCatalog.schemaDescribe,
                 request: EmptyOperationPayload()
             )
             record(

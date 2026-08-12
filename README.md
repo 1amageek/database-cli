@@ -5,14 +5,14 @@ It provides one-shot commands, an explicit interactive shell, lossless typed
 input and output, bounded pagination, and a separately linked FoundationDB
 diagnostic companion.
 
-Current development version: `26.0812.0`
+Current development version: `26.0812.1`
 
 ```mermaid
 flowchart LR
     CLI["database<br/>commands and shell"] --> Client["DatabaseClient"]
     Client --> Host["database-server<br/>HTTP / WebSocket / stdio"]
     Host --> Wire["DatabaseWire v1<br/>17 operation identifiers"]
-    Wire --> Runtime["DatabaseOperationRuntime"]
+    Wire --> Runtime["DatabaseOperationInstance"]
     Runtime --> Container["DBContainer<br/>database data root"]
     Container -. "MultipleBases trait" .-> Bases["Base isolation<br/>Composition reads"]
 
