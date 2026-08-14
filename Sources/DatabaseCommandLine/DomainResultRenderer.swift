@@ -75,6 +75,7 @@ extension ResultRenderer {
         _ = try renderJSON(node)
     }
 
+    #if DATABASE_CLI_MULTIPLE_BASES
     func renderBaseExecution(
         _ response: BaseExecuteOperation.Response
     ) throws {
@@ -105,9 +106,6 @@ extension ResultRenderer {
                 ("resultingRevision", .string(String(plan.resultingRevision))),
                 ("destinationPlacement", plan.destinationPlacementID.map {
                     .string($0.value)
-                } ?? .null),
-                ("layoutFingerprint", plan.layoutFingerprint.map {
-                    .string(Base64URL.encode($0.bytes))
                 } ?? .null),
                 ("requiresJob", .bool(plan.requiresJob)),
             ])
@@ -168,6 +166,7 @@ extension ResultRenderer {
         }
         _ = try renderJSON(node)
     }
+    #endif
 
     func schemaCompatibility(
         _ value: SchemaExecuteOperation.Compatibility
@@ -833,6 +832,7 @@ private extension ResultRenderer {
         return report.continuation
     }
 
+    #if DATABASE_CLI_MULTIPLE_BASES
     func baseDescriptionNode(
         _ description: BaseExecuteOperation.Description
     ) -> StrictJSONValue {
@@ -953,18 +953,20 @@ private extension ResultRenderer {
         case .activate: "activate"
         case .delete: "delete"
         case .move: "move"
-        case .migrateLegacyLayout: "migrateLegacyLayout"
         }
     }
+    #endif
 
     func operationName(_ value: DatabaseOperationIdentifier) -> String {
         switch value {
         case .capabilitiesDescribe: "capabilitiesDescribe"
         case .schemaDescribe: "schemaDescribe"
         case .schemaExecute: "schemaExecute"
+        #if DATABASE_CLI_MULTIPLE_BASES
         case .baseExecute: "baseExecute"
         case .compositionExecute: "compositionExecute"
         case .grantExecute: "grantExecute"
+        #endif
         case .queryExecute: "queryExecute"
         case .mutationExecute: "mutationExecute"
         case .graphAlgorithm: "graphAlgorithm"
@@ -988,7 +990,9 @@ private extension ResultRenderer {
         fields.append(("id", .string(job.jobID.description)))
         fields.append(("family", .string(operationName(job.operation.family))))
         fields.append(("kind", .string(job.operation.kind)))
+        #if DATABASE_CLI_MULTIPLE_BASES
         fields.append(("target", operationTargetNode(job.target)))
+        #endif
         return .object(fields)
     }
 

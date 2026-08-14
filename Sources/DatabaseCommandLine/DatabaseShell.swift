@@ -46,7 +46,6 @@ struct DatabaseShell: Sendable {
                 ?? "unconfigured",
             database: databaseName ?? selectedProfile?.databaseID ?? "main",
             mode: initialMode,
-            target: nil,
             outputFormat: command.options.value("output"),
             pageSize: command.options.value("page-size"),
             persistentHistory: command.options.contains("persist-history"),
@@ -172,7 +171,9 @@ private extension DatabaseShell {
         var promptConnection: String
         var database: String
         var mode: ShellMode
-        var target: Target?
+        #if DATABASE_CLI_MULTIPLE_BASES
+        var target: Target? = nil
+        #endif
         var outputFormat: String?
         var pageSize: String?
         var timing = false
@@ -185,11 +186,16 @@ private extension DatabaseShell {
 
         var prompt: String {
             let suffix = statementLines.isEmpty ? "> " : "...> "
+            #if DATABASE_CLI_MULTIPLE_BASES
             let targetLabel = target?.promptLabel ?? "database"
             return "\(promptConnection)/\(database) [\(targetLabel)] [\(mode.promptLabel)]\(suffix)"
+            #else
+            return "\(promptConnection)/\(database) [\(mode.promptLabel)]\(suffix)"
+            #endif
         }
     }
 
+    #if DATABASE_CLI_MULTIPLE_BASES
     enum Target: Sendable, Equatable {
         case base(String)
         case composition(String)
@@ -201,6 +207,7 @@ private extension DatabaseShell {
             }
         }
     }
+    #endif
 
     func completionSnapshot(
         profileName: String?,
@@ -304,25 +311,26 @@ private extension DatabaseShell {
         guard let meta = tokens.first else { return false }
         switch meta {
         case "\\help":
-            _ = try output.result(
-                """
-                \\help
-                \\profile <name>
-                \\database
-                \\base <id>
-                \\composition <id>
-                \\output table|jsonl|json|csv|nquads
-                \\timing on|off
-                \\budget
-                \\page-size <count>
-                \\next
-                \\history
-                \\mode command|sql-query|sql-mutation|sparql-query|sparql-update
-                \\g
-                \\clear
-                \\quit
-                """ + "\n"
-            )
+            var commands = [
+                "\\help",
+                "\\profile <name>",
+                "\\database",
+                "\\output table|jsonl|json|csv|nquads",
+                "\\timing on|off",
+                "\\budget",
+                "\\page-size <count>",
+                "\\next",
+                "\\history",
+                "\\mode command|sql-query|sql-mutation|sparql-query|sparql-update",
+                "\\g",
+                "\\clear",
+                "\\quit",
+            ]
+            #if DATABASE_CLI_MULTIPLE_BASES
+            commands.insert("\\base <id>", at: 3)
+            commands.insert("\\composition <id>", at: 4)
+            #endif
+            _ = try output.result(commands.joined(separator: "\n") + "\n")
         case "\\profile":
             guard session == nil else {
                 throw DatabaseCLIError(
@@ -337,13 +345,18 @@ private extension DatabaseShell {
             state.profile = profile.name
             state.promptConnection = profile.name
             state.database = profile.databaseID
+            #if DATABASE_CLI_MULTIPLE_BASES
             state.target = nil
+            #endif
         case "\\database":
             guard tokens.count == 1 else {
                 throw DatabaseCLIError(.input, "Usage: \\database")
             }
+            #if DATABASE_CLI_MULTIPLE_BASES
             state.target = nil
+            #endif
             state.statementLines.removeAll(keepingCapacity: true)
+        #if DATABASE_CLI_MULTIPLE_BASES
         case "\\base":
             guard tokens.count == 2 else {
                 throw DatabaseCLIError(.input, "Usage: \\base <id>")
@@ -358,6 +371,7 @@ private extension DatabaseShell {
             _ = try Base.Composition.ID(tokens[1])
             state.target = .composition(tokens[1])
             state.statementLines.removeAll(keepingCapacity: true)
+        #endif
         case "\\output":
             guard tokens.count == 2,
                   OutputFormat(rawValue: tokens[1]) != nil else {
@@ -468,11 +482,13 @@ private extension DatabaseShell {
             whenSupportedBy: descriptor,
             to: &arguments
         )
+        #if DATABASE_CLI_MULTIPLE_BASES
         try appendSelectedTarget(
             state.target,
             whenSupportedBy: descriptor,
             to: &arguments
         )
+        #endif
         let executionArguments = arguments
 
         let capture = ContinuationCapture()
@@ -539,6 +555,7 @@ private extension DatabaseShell {
         )
     }
 
+    #if DATABASE_CLI_MULTIPLE_BASES
     func appendSelectedTarget(
         _ target: Target?,
         whenSupportedBy command: CommandDescriptor,
@@ -572,6 +589,7 @@ private extension DatabaseShell {
             )
         }
     }
+    #endif
 
     func appendDefaultOption(
         _ name: String,

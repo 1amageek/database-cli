@@ -5,13 +5,14 @@ It provides one-shot commands, an explicit interactive shell, lossless typed
 input and output, bounded pagination, and a separately linked FoundationDB
 diagnostic companion.
 
-Current development version: `26.0812.1`
+Current development version: `26.0814.0`
 
 ```mermaid
 flowchart LR
     CLI["database<br/>commands and shell"] --> Client["DatabaseClient"]
     Client --> Host["database-server<br/>HTTP / WebSocket / stdio"]
-    Host --> Wire["DatabaseWire v1<br/>17 operation identifiers"]
+    Host --> Wire["DatabaseWire v2<br/>14 operation identifiers"]
+    Wire -. "MultipleBases: v3 / 17 operations" .-> Optional["Base + Composition + persisted Grant"]
     Wire --> Runtime["DatabaseOperationInstance"]
     Runtime --> Container["DBContainer<br/>database data root"]
     Container -. "MultipleBases trait" .-> Bases["Base isolation<br/>Composition reads"]
@@ -101,14 +102,16 @@ database open --storage postgresql \
   --postgres-database database
 
 database open --storage foundationdb \
-  --fdb-cluster-file /etc/foundationdb/fdb.cluster
+  --fdb-cluster-file /etc/foundationdb/fdb.cluster \
+  --fdb-directory applications \
+  --fdb-directory local
 ```
 
 | `--storage` | Selection contract |
 |---|---|
 | `sqlite` (default) | One positional file path or `--memory` |
 | `postgresql` | Exactly one TCP host or Unix socket, plus role and database |
-| `foundationdb` | An explicit cluster file; no default-cluster fallback |
+| `foundationdb` | An explicit cluster file and one or more ordered `--fdb-directory` components; no default fallback |
 
 The PostgreSQL password value is never accepted through argv. The optional
 password file is opened by the server as an owner-owned mode-`0600` regular
@@ -125,6 +128,8 @@ Start a persistent network server and create its local profile:
 database serve ./production.sqlite --profile production
 database serve --storage foundationdb \
   --fdb-cluster-file /etc/foundationdb/fdb.cluster \
+  --fdb-directory applications \
+  --fdb-directory production \
   --profile production-fdb
 ```
 
@@ -195,12 +200,11 @@ database
 ├── open
 ├── serve
 ├── schema list|show|plan|apply
-├── base
+├── base                                      [MultipleBases only]
 │   ├── placements|list|describe|create|retire|activate|delete
-│   ├── placement plan|apply
-│   └── legacy-migration plan|apply
-├── composition list|describe|create|replace|delete
-├── grant direct|effective|add|revoke
+│   └── placement plan|apply
+├── composition list|describe|create|replace|delete  [MultipleBases only]
+├── grant direct|effective|add|revoke                [MultipleBases only]
 ├── query sql|sparql
 ├── mutate sql|sparql
 ├── entity insert|update|upsert|delete|apply
@@ -239,18 +243,26 @@ expected current fingerprint and an
 idempotency key. A successful apply publishes one immutable runtime generation;
 in-flight requests retain their old generation lease.
 
-### Operation targets
+### Optional MultipleBases targets
 
-Every remote request carries exactly one `DatabaseOperationTarget`. The default
-data target is the database data root; no implicit or default Base exists.
+The standard CLI/runtime graph has one database root and emits target-free
+DatabaseWire v2 requests. It contains no Base/Composition/Grant commands and
+does not synthesize a `.database` target.
+
+Building the full dependency graph with the non-default `MultipleBases` trait
+adds DatabaseWire v3 and explicit `DatabaseOperationTarget` selection. In that
+configuration there is no implicit Base: data operations require `--base`, and
+read operations require either `--base` or `--composition`. Control and catalog
+commands select the database target from their command semantics.
 
 | Command kind | Target selection |
 |---|---|
-| Database control (`capabilities`, schema) | Database target is selected by the command |
-| Query | Database by default; optional `--base <id>` or read-only `--composition <id>` |
-| Mutation, graph, ontology, SHACL, application command, maintenance | Database by default; optional `--base <id>` |
-| Grant and job commands | Database by default; optional `--base <id>` |
-| Base/Composition catalog | Available only when the server advertises `base.execute` / `composition.execute` |
+| Standard graph | No operation target exists; every command addresses the single database root |
+| MultipleBases database control | Database target is selected by the command |
+| MultipleBases query | Required `--base <id>` or read-only `--composition <id>` |
+| MultipleBases data operations | Required `--base <id>` |
+| MultipleBases control/admin operations | Command-specific database or explicit Base target |
+| Base/Composition/Grant catalog | Compiled only with `MultipleBases` and capability-checked at runtime |
 
 Graph algorithms also use `--target` for a destination vertex. That option is
 part of the graph algorithm request and is unrelated to the DatabaseWire
@@ -411,9 +423,9 @@ use `\g` explicitly.
 ```text
 \help
 \profile <name>
-\database
-\base <id>
-\composition <id>
+\database                     [MultipleBases only]
+\base <id>                    [MultipleBases only]
+\composition <id>             [MultipleBases only]
 \output table|jsonl|json|csv|nquads
 \timing on|off
 \budget
@@ -430,11 +442,12 @@ use `\g` explicitly.
 continuation. The shell does not keep a server-side transaction alive and does
 not provide `begin`, `commit`, or `rollback` commands.
 
-Statement modes target the database data root by default. `\base <id>` selects
-one Base for reads and mutations; `\composition <id>` selects a read-only
-Composition; `\database` returns to the database data root. The prompt always
-displays the selected target, and switching profiles returns to the database
-target.
+Standard statement modes execute against the single database root and the
+prompt has no target selector. With `MultipleBases`, `\base <id>` selects one
+Base for reads and mutations, `\composition <id>` selects a read-only
+Composition, and `\database` returns to the database/control target. The
+trait-enabled prompt displays that selection; switching profiles returns to
+the database target.
 
 History is memory-only by default. `--persist-history` enables a mode-`0600`
 history file; authentication commands are never recorded. Ctrl-C cancels the
@@ -474,8 +487,8 @@ commands do not exist.
 
 Catalog reads require the control-domain namespace explicitly, one
 `--control-namespace` option per ordered path component. The helper resolves
-that exact existing namespace and never reads the legacy global root or creates
-a missing namespace.
+that exact existing namespace and never probes the global root or creates a
+missing namespace.
 
 An explicit missing or unreachable cluster file is a typed failure. The helper
 never falls back to the system default cluster. Readiness requires a real
@@ -523,9 +536,11 @@ scripts/xcode-test-harness
 
 The harness resolves URL dependencies without using Xcode's shared repository
 cache, builds once, injects the matching Swift Testing runtime, and runs the
-generated `.xctestrun` without rebuilding. The reviewed contract is 62 logical
-tests, zero failures, zero skips, zero expected failures, zero runtime warnings,
-and no internal tool errors.
+generated `.xctestrun` without rebuilding. The reviewed standard contract is
+47 logical tests. An isolated `MultipleBases` graph uses
+`DATABASE_CLI_EXPECTED_TEST_COUNT=61` and requires 61 tests. Both require zero
+failures, zero skips, zero expected failures, zero runtime warnings, and no
+internal tool errors.
 
 Process and real FoundationDB integration use the exact binaries from the
 URL-resolved build:

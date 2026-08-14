@@ -2,11 +2,10 @@ import DatabaseClient
 @_spi(Testing) import DatabaseEngine
 import DatabaseKit
 import DatabaseRuntime
-@testable import DatabaseOperations
-import DatabaseWireAdapter
-import DatabaseFoundation
+@testable import DatabaseServerRuntime
+import DatabaseServerFoundation
 import DatabaseTypes
-@_spi(DatabaseOperations) import DatabaseWire
+@_spi(DatabaseExecution) import DatabaseWire
 import Foundation
 import SQLiteStorage
 import StorageKit
@@ -29,43 +28,49 @@ private enum RuntimeBackend: String, Sendable {
 
 @Suite("CLI runtime integration", .serialized)
 struct RuntimeIntegrationTests {
-    @Test("CLI executes every standard operation family against the database root")
+    @Test("CLI executes every standard operation family against an explicit target")
     func executesEveryStandardRuntimeOperationFamily() async throws {
         try await withRuntime(backend: .inMemory) { executor, outputURL in
             try await executor.execute(try parse(["capabilities"]))
-            try await executor.execute(try parse(["grant", "effective"]))
+            #if DATABASE_CLI_MULTIPLE_BASES
+            try await executor.execute(try parse([
+                "grant", "effective", "--base", "test",
+            ]))
+            #endif
             try await insertEntity(executor)
             try await queryEntity(executor)
-            try await executor.execute(try parse([
+            try await executor.execute(try parse(dataArguments([
                 "graph", "page-rank", "--index", "relationships",
-            ]))
-            try await executor.execute(try parse([
+            ])))
+            try await executor.execute(try parse(dataArguments([
                 "ontology", "describe", "world",
-            ]))
-            try await executor.execute(try parse([
+            ])))
+            try await executor.execute(try parse(dataArguments([
                 "shacl", "describe", "urn:shapes",
-            ]))
-            try await executor.execute(try parse([
+            ])))
+            try await executor.execute(try parse(dataArguments([
                 "command", "run", "cli.echo", emptyObject,
-            ]))
-            try await executor.execute(try parse(["maintenance", "compact"]))
-            try await executor.execute(try parse([
+            ])))
+            try await executor.execute(try parse(dataArguments([
+                "maintenance", "compact",
+            ])))
+            try await executor.execute(try parse(dataArguments([
                 "command", "run", "cli.echo", emptyObject,
                 "--as-job", RuntimeServices.jobKind,
                 "--idempotency-key", "runtime-job-start",
-            ]))
-            try await executor.execute(try parse([
+            ])))
+            try await executor.execute(try parse(dataArguments([
                 "job", "status", RuntimeServices.jobIdentifier,
                 "commandExecute", RuntimeServices.jobKind,
-            ]))
-            try await executor.execute(try parse([
+            ])))
+            try await executor.execute(try parse(dataArguments([
                 "job", "result", RuntimeServices.jobIdentifier,
                 "commandExecute", RuntimeServices.jobKind,
-            ]))
-            try await executor.execute(try parse([
+            ])))
+            try await executor.execute(try parse(dataArguments([
                 "job", "cancel", RuntimeServices.jobIdentifier,
                 "commandExecute", RuntimeServices.jobKind,
-            ]))
+            ])))
 
             let output = try String(contentsOf: outputURL, encoding: .utf8)
             #expect(output.contains("cli-runtime"))
@@ -92,19 +97,27 @@ struct RuntimeIntegrationTests {
     }
 
     private func insertEntity(_ executor: RemoteCommandExecutor) async throws {
-        try await executor.execute(try parse([
+        var arguments = [
             "entity", "insert", "CLIRuntimeEntity",
             #"{"$type":"string","value":"runtime-entity"}"#,
             entityFields,
             "--must-not-exist",
             "--idempotency-key", "insert-runtime-entity",
-        ]))
+        ]
+        #if DATABASE_CLI_MULTIPLE_BASES
+        arguments.append(contentsOf: ["--base", "test"])
+        #endif
+        try await executor.execute(try parse(arguments))
     }
 
     private func queryEntity(_ executor: RemoteCommandExecutor) async throws {
-        try await executor.execute(try parse([
+        var arguments = [
             "query", "sql", "SELECT * FROM CLIRuntimeEntity",
-        ]))
+        ]
+        #if DATABASE_CLI_MULTIPLE_BASES
+        arguments.append(contentsOf: ["--base", "test"])
+        #endif
+        try await executor.execute(try parse(arguments))
     }
 
     private func parse(_ arguments: [String]) throws -> ParsedCommand {
@@ -115,6 +128,14 @@ struct RuntimeIntegrationTests {
             return parsed
         }
         return try parser.parse(arguments + ["--output", "jsonl"])
+    }
+
+    private func dataArguments(_ arguments: [String]) -> [String] {
+        #if DATABASE_CLI_MULTIPLE_BASES
+        arguments + ["--base", "test"]
+        #else
+        arguments
+        #endif
     }
 
     private func withRuntime(
@@ -193,21 +214,45 @@ struct RuntimeIntegrationTests {
         case .sqlite:
             engine = try SQLiteStorageEngine(configuration: .inMemory)
         }
+        #if DATABASE_CLI_MULTIPLE_BASES
         let domainID = try DatabaseStorageDomain.ID("cli-primary")
-        let domain = try DatabaseStorageDomain(
-            id: domainID,
-            namespacePath: ["database", "cli-runtime"],
-            storageEngine: engine
+        let placementID = try Base.Placement.ID("cli-default")
+        let configuration = DBConfiguration(
+            testingName: "database-cli-runtime",
+            storageTopology: try DatabaseStorageTopology(
+                controlDomainID: domainID,
+                domains: [
+                    try DatabaseStorageDomain(
+                        id: domainID,
+                        namespacePath: ["database", "cli-runtime"],
+                        storageEngine: engine
+                    ),
+                ],
+                placements: [
+                    try DatabaseStoragePlacement(
+                        id: placementID,
+                        domainID: domainID,
+                        path: ["bases"]
+                    ),
+                ],
+                defaultPlacementID: placementID
+            ),
+            monotonicClock: RuntimeIntegrationClock(),
+            wallClock: RealtimeDatabaseWallClock(),
+            testingBaseID: try Base.ID("test"),
+            testingPrincipal: Principal(
+                identifier: runtimePrincipalID,
+                roles: ["admin"]
+            )
         )
-        let topology = DatabaseStorageTopology(
-            controlDomain: domain
-        )
+        #else
         let configuration = DBConfiguration(
             name: "database-cli-runtime",
-            storageTopology: topology,
+            storageEngine: engine,
             monotonicClock: RuntimeIntegrationClock(),
             wallClock: RealtimeDatabaseWallClock()
         )
+        #endif
         return try await DBContainer.open(
             for: try Schema(
                 entities: [try CLIRuntimeEntity.schemaEntity],
@@ -357,13 +402,21 @@ private struct RuntimeServices:
             kind: Self.jobKind
         )
         self.jobOperations = [operation]
+        #if DATABASE_CLI_MULTIPLE_BASES
         self.job = JobIdentity(
             jobID: identifier,
             operation: operation,
-            target: .database
+            target: .base(try Base.ID("test"))
         )
+        #else
+        self.job = JobIdentity(
+            jobID: identifier,
+            operation: operation
+        )
+        #endif
     }
 
+    #if DATABASE_CLI_MULTIPLE_BASES
     func baseAdmission(
         for operation: JobOperationIdentifier
     ) throws -> DatabaseBaseAdmissionKind {
@@ -372,6 +425,7 @@ private struct RuntimeServices:
         }
         return .activeData
     }
+    #endif
 
     func execute(
         _ request: GraphAlgorithmOperation.Request,
@@ -493,10 +547,16 @@ private struct RuntimeServices:
         let payload = try operation.encodeCompletedResponse(
             .read(output: .string("job-result"), continuation: nil)
         )
+        #if DATABASE_CLI_MULTIPLE_BASES
         var accumulator = JobResultDigestAccumulator(
             operation: job.operation,
             target: job.target
         )
+        #else
+        var accumulator = JobResultDigestAccumulator(
+            operation: job.operation
+        )
+        #endif
         accumulator.update(payload)
         return .succeeded(
             job: job,

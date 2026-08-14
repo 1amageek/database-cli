@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import DatabaseCommandLine
 
+#if DATABASE_CLI_MULTIPLE_BASES
 private struct CommandFixture: Sendable {
     let arguments: [String]
     let path: [String]
@@ -38,8 +39,6 @@ private let commandFixtures: [CommandFixture] = [
     .init(arguments: ["base", "delete", baseID, "--expected-revision", "3", "--idempotency-key", "base-delete"], path: ["base", "delete"]),
     .init(arguments: ["base", "placement", "plan", baseID, "--destination", "archive", "--expected-revision", "4"], path: ["base", "placement", "plan"]),
     .init(arguments: ["base", "placement", "apply", baseID, "--destination", "archive", "--expected-revision", "4", "--idempotency-key", "base-move"], path: ["base", "placement", "apply"]),
-    .init(arguments: ["base", "legacy-migration", "plan", baseID, "--placement", "default", "--initial-grant", initialGrant], path: ["base", "legacy-migration", "plan"]),
-    .init(arguments: ["base", "legacy-migration", "apply", baseID, "--placement", "default", "--initial-grant", initialGrant, "--expected-layout-fingerprint", emptyFingerprint, "--expected-revision", "0", "--idempotency-key", "legacy-migrate"], path: ["base", "legacy-migration", "apply"]),
     .init(arguments: ["composition", "list"], path: ["composition", "list"]),
     .init(arguments: ["composition", "describe", compositionID], path: ["composition", "describe"]),
     .init(arguments: ["composition", "create", compositionID, "--base", baseID, "--expected-revision", "0", "--idempotency-key", "composition-create"], path: ["composition", "create"]),
@@ -112,6 +111,8 @@ private let commandFixtures: [CommandFixture] = [
         arguments: [
             "open", "--storage", "foundationdb",
             "--fdb-cluster-file", "/tmp/fdb.cluster",
+            "--fdb-directory", "applications",
+            "--fdb-directory", "main",
         ],
         path: ["open"]
     ),
@@ -273,8 +274,13 @@ func requiredOptionsAreValidatedByCatalog() throws {
     #expect(throws: DatabaseCLIError.self) {
         try CommandParser().parse(["serve", "database.sqlite"])
     }
-    #expect(throws: Never.self) {
+    #expect(throws: DatabaseCLIError.self) {
         try CommandParser().parse(["query", "sql", "SELECT 1"])
+    }
+    #expect(throws: Never.self) {
+        try CommandParser().parse([
+            "query", "sql", "SELECT 1", "--base", baseID,
+        ])
     }
     #expect(throws: DatabaseCLIError.self) {
         try CommandParser().parse([
@@ -299,28 +305,49 @@ func requiredOptionsAreValidatedByCatalog() throws {
             "--postgres-port", "5433",
             "--postgres-user", "database",
             "--postgres-database", "database",
+            "--domain-namespace", "applications",
+            "--domain-namespace", "main",
         ])
     )
     #expect(postgreSQL.serverArguments.contains("postgresql"))
     #expect(postgreSQL.serverArguments.contains("5433"))
+    #expect(postgreSQL.serverArguments.suffix(4) == [
+        "--domain-namespace", "applications", "--domain-namespace", "main",
+    ])
 
     let foundationDB = try StandaloneStorageSelection.resolve(
         parser.parse([
             "open", "--storage", "foundationdb",
             "--fdb-cluster-file", "/tmp/fdb.cluster",
+            "--fdb-directory", "applications",
+            "--fdb-directory", "main",
         ])
     )
     #expect(foundationDB.serverArguments.contains("foundationdb"))
     #expect(foundationDB.serverArguments.contains("/tmp/fdb.cluster"))
+    #expect(foundationDB.serverArguments.suffix(4) == [
+        "--fdb-directory", "applications", "--fdb-directory", "main",
+    ])
 
     #expect(throws: DatabaseCLIError.self) {
         try StandaloneStorageSelection.resolve(
-            parser.parse(["open", "--storage", "postgresql", "db.sqlite"])
+            parser.parse([
+                "open", "--storage", "postgresql", "db.sqlite",
+                "--domain-namespace", "main",
+            ])
         )
     }
     #expect(throws: DatabaseCLIError.self) {
         try StandaloneStorageSelection.resolve(
             parser.parse(["open", "--storage", "foundationdb"])
+        )
+    }
+    #expect(throws: DatabaseCLIError.self) {
+        try StandaloneStorageSelection.resolve(
+            parser.parse([
+                "open", "--storage", "foundationdb",
+                "--fdb-cluster-file", "/tmp/fdb.cluster",
+            ])
         )
     }
 }
@@ -347,3 +374,4 @@ private extension OutputWriter {
         )
     }
 }
+#endif

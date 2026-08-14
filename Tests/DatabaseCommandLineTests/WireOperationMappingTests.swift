@@ -7,6 +7,7 @@ import Synchronization
 import Testing
 @testable import DatabaseCommandLine
 
+#if DATABASE_CLI_MULTIPLE_BASES
 private struct OperationFixture: Sendable {
     enum Target: Sendable {
         case database
@@ -44,7 +45,7 @@ private let operationFixtures: [OperationFixture] = [
     .init(arguments: ["inspect", "jobs"], operation: .capabilitiesDescribe, target: .database),
     .init(arguments: ["inspect", "ontology", "world", "--base", "company-a"], operation: .ontologyExecute, target: .base("company-a")),
     .init(arguments: ["inspect", "shapes", "urn:shapes", "--base", "company-a"], operation: .shaclExecute, target: .base("company-a")),
-    .init(arguments: ["query", "sql", "SELECT 1"], operation: .queryExecute, target: .database),
+    .init(arguments: ["query", "sql", "SELECT 1", "--base", "company-a"], operation: .queryExecute, target: .base("company-a")),
     .init(arguments: ["mutate", "sparql", "CLEAR DEFAULT", "--base", "company-a"], operation: .mutationExecute, target: .base("company-a")),
     .init(arguments: ["graph", "page-rank", "--index", "social", "--base", "company-a"], operation: .graphAlgorithm, target: .base("company-a")),
     .init(arguments: ["ontology", "describe", "world", "--base", "company-a"], operation: .ontologyExecute, target: .base("company-a")),
@@ -60,7 +61,10 @@ private let operationFixtures: [OperationFixture] = [
     ),
     .init(arguments: ["maintenance", "compact", "--base", "company-a"], operation: .maintenanceExecute, target: .base("company-a")),
     .init(
-        arguments: ["job", "status", jobID, "queryExecute", "query"],
+        arguments: [
+            "job", "status", jobID, "queryExecute", "query",
+            "--database-target",
+        ],
         operation: .jobStatus,
         target: .database
     ),
@@ -222,20 +226,28 @@ func effectiveGrantRequestContract() throws {
     #expect(request.invocation == .effective)
 }
 
-@Test("Data and Grant commands default to the database target")
-func commandsDefaultToDatabaseTarget() throws {
+@Test("Data, Grant, and Job commands require an explicit target")
+func commandsRequireExplicitTarget() throws {
     let parser = CommandParser()
     let builder = WireRequestBuilder()
     let commands = try [
-        parser.parse(["query", "sql", "SELECT 1"]),
-        parser.parse(["mutate", "sql", "DELETE FROM Person"]),
-        parser.parse(["grant", "direct"]),
-        parser.parse(["grant", "effective"]),
-        parser.parse(["job", "status", jobID, "queryExecute", "query"]),
+        parser.parse([
+            "query", "sql", "SELECT 1", "--base", "company-a",
+        ]),
+        parser.parse([
+            "mutate", "sql", "DELETE FROM Person",
+            "--base", "company-a",
+        ]),
+        parser.parse(["grant", "direct", "--database-target"]),
+        parser.parse(["grant", "effective", "--database-target"]),
+        parser.parse([
+            "job", "status", jobID, "queryExecute", "query",
+            "--database-target",
+        ]),
     ]
     #expect(try commands.map(builder.operationTarget) == [
-        .database,
-        .database,
+        .base(try Base.ID("company-a")),
+        .base(try Base.ID("company-a")),
         .database,
         .database,
         .database,
@@ -429,6 +441,8 @@ private func databaseTarget(
         return .composition(try Base.Composition.ID(id))
     }
 }
+
+#endif
 
 private final class OpenSchemaProbeTransport: DatabaseTransport, Sendable {
     private struct State: Sendable {

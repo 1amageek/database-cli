@@ -20,7 +20,7 @@ DatabaseCLIExecutable
 DatabaseServerExecutable
 └── DatabaseServerHost
     ├── DatabaseOperationApplication
-    ├── DatabaseWireAdapter
+    ├── DatabaseServerRuntime
     ├── DatabaseOperationInstance
     ├── SQLiteStorage
     ├── PostgreSQLStorage

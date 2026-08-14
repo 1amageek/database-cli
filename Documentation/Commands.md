@@ -57,20 +57,24 @@ another command is an input error.
 | `--continuation` | Resume a command whose request accepts the detached continuation |
 | `--all` and aggregate limits | Reissue successive paged requests client-side; not valid with `--as-job` |
 | `--as-job <kind>` | Start the same typed operation through `jobStart` after capability validation |
-| `--base <id>` | Override the database data root with a Base-local operation, Grant, or job target |
-| `--composition <id>` | Bind a read-only query to a named Composition; conflicts with `--base` |
-| `--database-target` | Explicit spelling of the default database target for Grant/job commands; conflicts with `--base` |
+| `--base <id>` | `MultipleBases` only: select a Base-local operation, Grant, or job target |
+| `--composition <id>` | `MultipleBases` only: bind a read-only query to a named Composition; conflicts with `--base` |
+| `--database-target` | `MultipleBases` only: explicitly select the database/control target for Grant/job commands; conflicts with `--base` |
 
 `--max-total-rows`, `--max-total-bytes`, and `--max-pages` require `--all`.
 `--all` requires all three limits and conflicts with `--continuation` and
 `--as-job`. A page is rendered and released before the next page is requested.
 
-Every remote invocation carries one `DatabaseOperationTarget`. Data, Grant, and
-job commands target the database data root when no target option is supplied.
-`--base` selects a Base when the server advertises `base.execute`, while
-read-only queries may instead select a `--composition`. Database catalog
-commands select the database target from their command semantics. There is no
-implicit or default Base.
+The standard build emits target-free DatabaseWire v2 requests against one
+database root. `DatabaseOperationTarget`, Base, Composition, persisted Grant,
+and the three options above are absent from that command graph.
+
+The non-default `MultipleBases` trait switches the full dependency graph to
+DatabaseWire v3. Only then does every remote invocation carry one explicit
+`DatabaseOperationTarget`. Data operations require `--base`; read-only queries
+require either `--base` or `--composition`; catalog and control commands select
+the database/control target from their command semantics. There is no implicit
+or default Base.
 
 ## General commands
 
@@ -111,7 +115,7 @@ failure.
 | SQLite file | one `[path]` | Creates or opens that file |
 | SQLite memory | `--memory` | Process-local only |
 | PostgreSQL | `--storage postgresql`, exactly one host/socket, user, and database | Uses the configured table and schema-management policy |
-| FoundationDB | `--storage foundationdb --fdb-cluster-file <path>` | Uses only the explicit cluster |
+| FoundationDB | `--storage foundationdb --fdb-cluster-file <path> --fdb-directory <component> [...]` | Uses only the explicit cluster and ordered Directory path |
 
 `--schema` plans and applies a strict manifest before the shell opens.
 `--mode` selects the initial shell mode. Failure to start or negotiate with the
@@ -140,9 +144,9 @@ SPARQL until `\g`; a semicolon never triggers execution.
 ```text
 \help                         show shell meta commands
 \profile <name>               switch a remote profile
-\database                     select the database data root
-\base <id>                    select one Base for reads and mutations
-\composition <id>             select one read-only Composition
+\database                     MultipleBases only: select database/control
+\base <id>                    MultipleBases only: select one Base
+\composition <id>             MultipleBases only: select read-only Composition
 \output <format>              set a default for commands supporting output
 \timing on|off                show client elapsed time
 \budget                       show execution-budget defaults
@@ -155,8 +159,9 @@ SPARQL until `\g`; a semicolon never triggers execution.
 
 The shell injects a default only when the selected command declares that
 option. It does not add paging to mutations or connection options to local
-profile commands. The selected target is visible in the prompt. `\database`
-and profile changes select the database data root, while Composition selection
+profile commands. The standard prompt has no target state. With
+`MultipleBases`, the selected target is visible in the prompt; `\database` and
+profile changes select the database/control target, while Composition selection
 is rejected by mutation commands. There is no long-lived server transaction.
 
 ## Capability and schema commands
@@ -188,8 +193,6 @@ destinations without exposing backend credentials.
 | `database base delete <base>` | Base target; expected revision and idempotency key. | Starts deletion and leaves a non-reusable tombstone. |
 | `database base placement plan <base>` | Base target; destination and expected revision. | Validates an offline move without changing data. |
 | `database base placement apply <base>` | Base target; destination, expected revision, and idempotency key. | Starts resumable copy, digest verification, cutover, and cleanup. |
-| `database base legacy-migration plan <base>` | Database target; placement and initial Grants. | Inventories a legacy global layout and returns its layout fingerprint. |
-| `database base legacy-migration apply <base>` | Database target; placement, initial Grants, expected layout fingerprint/revision, and idempotency key. | Starts the explicit resumable migration; no legacy alias is retained. |
 
 Initial Grants use repeatable
 `--initial-grant 'principal:<id>=read,write,administer'` or
@@ -234,10 +237,10 @@ are evaluated. The CLI never implements an administrator bypass.
 
 | Command | Wire operation | Behavior | Output / effects |
 |---|---|---|---|
-| `database query sql <statement>` | `queryExecute` with SQL text | Targets the database by default; `--base` or `--composition` overrides it. Statement `LIMIT` changes query semantics; `--page-size` only bounds one response page. | Rows, RDF graph, or boolean according to the canonical response; paged and job-capable. |
-| `database query sparql <statement>` | `queryExecute` with SPARQL text | Uses the same database-default target, parameter, graph-partition, budget, paging, and job contracts. | Rows, RDF graph, or boolean; paged and job-capable. |
-| `database mutate sql <statement>` | `mutationExecute` statement input | Targets the database by default or one `--base`, and executes one mutating SQL operation with parameters, graph partitions, budget, metadata, and optional job start. | JSON commit version and entity/RDF effects; no result paging options. |
-| `database mutate sparql <statement>` | `mutationExecute` statement input | Targets the database by default or one `--base`, and executes one SPARQL update under the mutation transaction contract. | JSON commit version and RDF effects; no result paging options. |
+| `database query sql <statement>` | `queryExecute` with SQL text | Standard: single database root. `MultipleBases`: required `--base` or `--composition`. Statement `LIMIT` changes query semantics; `--page-size` only bounds one response page. | Rows, RDF graph, or boolean according to the canonical response; paged and job-capable. |
+| `database query sparql <statement>` | `queryExecute` with SPARQL text | Uses the same trait-dependent root selection, parameter, graph-partition, budget, paging, and job contracts. | Rows, RDF graph, or boolean; paged and job-capable. |
+| `database mutate sql <statement>` | `mutationExecute` statement input | Standard: single database root. `MultipleBases`: required `--base`. Executes one mutating SQL operation with parameters, graph partitions, budget, metadata, and optional job start. | JSON commit version and entity/RDF effects; no result paging options. |
+| `database mutate sparql <statement>` | `mutationExecute` statement input | Uses the same trait-dependent data-root selection and executes one SPARQL update under the mutation transaction contract. | JSON commit version and RDF effects; no result paging options. |
 
 `--parameter '<selector>=<typed-literal>'` is repeatable and supports positional
 selectors such as `$1` or named selectors. `--parameters` accepts the canonical
@@ -267,8 +270,8 @@ do not accept query parameters or paging controls.
 
 ## Graph algorithms
 
-Every graph command maps to `graphAlgorithm`, requires a declared `--index`,
-targets the database by default or one `--base`, and accepts source selection
+Every graph command maps to `graphAlgorithm` and requires a declared `--index`.
+It uses the standard single root or a required `--base` with `MultipleBases`, and accepts source selection
 (`--partitions`, `--graph`, `--edge-label`), an execution budget, result paging,
 streaming output, and an advertised job kind.
 
@@ -297,7 +300,8 @@ capability, index, and resource failures remain typed failures.
 | `database ontology hierarchy <ontology> <resource>` | Selects class/object-property/data-property, ancestors/descendants, and maximum depth. | Resource/depth entries; read-only and paged. |
 | `database ontology validate-schema <ontology>` | Checks ontology/schema alignment. | Validation report; read-only and paged. |
 
-All ontology commands target the database by default or one `--base`, enforce
+Ontology commands use the standard single root or a required `--base` with
+`MultipleBases`, enforce
 the execution budget, and support advertised job kinds. Only commands whose
 responses can continue expose paging controls.
 
@@ -310,15 +314,16 @@ responses can continue expose paging controls.
 | `database shacl delete <graph>` | Deletes with optional expected revision. | Commit version and new revision; mutating. |
 | `database shacl validate <shapes-graph>` | Requires source entity/index; optionally selects partitions, data graph, focus, and entailment. | Conformance/violation report; read-only and paged. Non-conformance is data, while execution failure is a typed error. |
 
-All SHACL commands target the database by default or one `--base`, enforce
+SHACL commands use the standard single root or a required `--base` with
+`MultipleBases`, enforce
 budgets, and support advertised job kinds. Named data graphs are tagged RDF
 terms. Explicit focus is a tagged array containing only RDF terms or only
 entity references.
 
 ## Application commands
 
-`database command run <identifier> <input>` maps to `commandExecute`, targets
-the database by default or one `--base`, and accepts input that
+`database command run <identifier> <input>` maps to `commandExecute`. It uses
+the standard single root or a required `--base` with `MultipleBases`, and accepts input that
 must be a tagged object. `--access read-only|read-write` declares the canonical
 command access contract and defaults to read-only; it is not inferred from the
 identifier or payload. The registered server command remains authoritative and
@@ -328,7 +333,8 @@ stream output, and advertised jobs, but not query paging controls.
 
 ## Migration, index, and maintenance
 
-These commands target the database by default or one `--base` and map to
+These commands use the standard single root or a required `--base` with
+`MultipleBases` and map to
 `maintenanceExecute`. They can hold locks, consume significant work budget,
 and change persistent state as described below.
 
@@ -358,8 +364,9 @@ The family spelling is the DatabaseWire identifier such as `queryExecute` or
 | `database job result <job-id> <family> <kind>` | Dispatches `jobResult` through the typed source operation. | Decoded source-operation result; requires a completed compatible job. |
 | `database job cancel <job-id> <family> <kind>` | Sends `jobCancel`. | Whether cancellation was accepted and current state; acceptance is not the same as terminal cancellation. |
 
-Every job command targets the database by default or one `--base`, and the
-selected target must match the persisted job identity. `job wait` alone
+Standard job commands are target-free. With `MultipleBases`, every job command
+selects the database/control target or one `--base`, and the selected target
+must match the persisted job identity. `job wait` alone
 accepts polling interval and client wait timeout. Job commands
 do not accept `--as-job`, query parameters, execution budgets, or source-result
 paging controls.
@@ -374,10 +381,10 @@ successful collection.
 |---|---|
 | `database inspect overview` | `capabilitiesDescribe` plus `schemaDescribe` |
 | `database inspect entities [entity]` | All schema entities or one selected entity |
-| `database inspect indexes` | Schema index declarations plus database-default or Base-targeted `maintenanceExecute.indexStatus`; accepts entity filter and returned continuation |
+| `database inspect indexes` | Schema index declarations plus standard-root or `MultipleBases` Base-targeted `maintenanceExecute.indexStatus`; accepts entity filter and returned continuation |
 | `database inspect graph` | Graph-relevant relationship/index declarations from schema; optional entity filter |
-| `database inspect ontology <ontology-id>` | Database-default or Base-targeted canonical ontology describe path |
-| `database inspect shapes <shape-graph-id>` | Database-default or Base-targeted canonical SHACL describe path |
+| `database inspect ontology <ontology-id>` | Standard-root or `MultipleBases` Base-targeted canonical ontology describe path |
+| `database inspect shapes <shape-graph-id>` | Standard-root or `MultipleBases` Base-targeted canonical SHACL describe path |
 | `database inspect jobs` | Advertised family/kind pairs from capabilities; not a list of all job instances |
 
 ## Diagnostics
@@ -415,7 +422,7 @@ Raw key selectors are mutually exclusive. Raw write, delete, clear, implicit
 tuple conversion, and fallback cluster selection are intentionally absent.
 Catalog commands require one repeatable `--control-namespace` value per ordered
 namespace path component. They neither assume a default control domain nor
-fall back to the legacy global namespace.
+fall back to the global namespace.
 
 ## Output formats
 

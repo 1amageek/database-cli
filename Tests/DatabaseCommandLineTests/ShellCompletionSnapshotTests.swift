@@ -14,8 +14,13 @@ struct ShellCompletionSnapshotTests {
         )
 
         #expect(snapshot.values(in: "").contains("schema"))
+        #if DATABASE_CLI_MULTIPLE_BASES
         #expect(snapshot.values(in: "").contains("\\base"))
         #expect(snapshot.values(in: "").contains("\\composition"))
+        #else
+        #expect(!snapshot.values(in: "").contains("\\base"))
+        #expect(!snapshot.values(in: "").contains("\\composition"))
+        #endif
         #expect(snapshot.values(in: "").contains("\\database"))
         #expect(snapshot.values(in: "schema ").contains("show"))
         #expect(snapshot.values(in: "\\profile ") == ["production", "staging"])

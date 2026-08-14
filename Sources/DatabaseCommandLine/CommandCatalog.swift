@@ -203,12 +203,14 @@ private extension CommandCatalog {
             if budget { result += executionBudgetOptions }
             if parameters { result += parameterOptions }
             if graphPartitions { result += graphPartitionOptions }
+            #if DATABASE_CLI_MULTIPLE_BASES
             if baseTarget {
                 result.append(
                     .value(
                         "base",
                         "id",
-                        summary: "Execute against one Base instead of the database."
+                        summary: "Execute against the required data Base.",
+                        required: true
                     )
                 )
             }
@@ -243,6 +245,11 @@ private extension CommandCatalog {
                     ),
                 ]
             }
+            #else
+            _ = baseTarget
+            _ = readableTarget
+            _ = jobTarget
+            #endif
             if pageSize {
                 result.append(
                     .value(
@@ -313,7 +320,7 @@ private extension CommandCatalog {
             )
         }
 
-        let standaloneStorageOptions: [CommandOptionDescriptor] = [
+        var standaloneStorageOptions: [CommandOptionDescriptor] = [
             .value(
                 "storage",
                 "sqlite|postgresql|foundationdb",
@@ -378,7 +385,23 @@ private extension CommandCatalog {
                 "path",
                 summary: "Select an explicit FoundationDB cluster."
             ),
+            .value(
+                "fdb-directory",
+                "component",
+                summary: "Append one FoundationDB Directory component; repeat for nested directories.",
+                repeatable: true
+            ),
         ]
+        #if DATABASE_CLI_MULTIPLE_BASES
+        standaloneStorageOptions.append(
+            .value(
+                "domain-namespace",
+                "component",
+                summary: "Append one non-FoundationDB storage namespace component; repeat for nested namespaces.",
+                repeatable: true
+            )
+        )
+        #endif
 
         add(["help"], 0...3, usage: "[command]", summary: "Show command-specific help.")
         add(["version"], 0...0, usage: "", summary: "Show the CLI version.")
@@ -442,6 +465,7 @@ private extension CommandCatalog {
             requiredIdempotencyKey: true
         ), capability: "schema.execute")
 
+        #if DATABASE_CLI_MULTIPLE_BASES
         let expectedRevision = CommandOptionDescriptor.value(
             "expected-revision",
             "uint64",
@@ -483,20 +507,6 @@ private extension CommandCatalog {
             ],
             requiredIdempotencyKey: true
         ), capability: "base.execute")
-        add(["base", "legacy-migration", "plan"], 1...1, usage: "<base> --placement <placement> --initial-grant <grant>", summary: "Inventory and plan migration of a legacy global layout.", options: remoteOptions(specific: [
-            .value("placement", "id", summary: "Select the destination placement.", required: true),
-            initialGrant,
-        ]), capability: "base.execute")
-        add(["base", "legacy-migration", "apply"], 1...1, usage: "<base> --placement <placement> --initial-grant <grant> --expected-layout-fingerprint <base64url>", summary: "Start explicit migration of a legacy global layout.", options: remoteOptions(
-            specific: [
-                .value("placement", "id", summary: "Select the destination placement.", required: true),
-                initialGrant,
-                .value("expected-layout-fingerprint", "base64url", summary: "Require the planned legacy layout fingerprint.", required: true),
-                expectedRevision,
-            ],
-            requiredIdempotencyKey: true
-        ), capability: "base.execute")
-
         let compositionBases = CommandOptionDescriptor.value(
             "base",
             "id",
@@ -539,6 +549,15 @@ private extension CommandCatalog {
                 requiredIdempotencyKey: true
             ), requiredAnyOf: [grantSubjectRequirement], capability: "grant.execute")
         }
+        #endif
+
+        #if DATABASE_CLI_MULTIPLE_BASES
+        let readableTargetRequirement: [Set<String>] = [
+            ["base", "composition"],
+        ]
+        #else
+        let readableTargetRequirement: [Set<String>] = []
+        #endif
 
         for language in ["sql", "sparql"] {
             add(["query", language], 1...1, usage: "<statement|@path|@->", summary: "Execute a read-only \(language.uppercased()) statement.", options: remoteOptions(
@@ -551,7 +570,7 @@ private extension CommandCatalog {
                 graphPartitions: true,
                 job: true,
                 readableTarget: true
-            ), capability: "query.execute")
+            ), requiredAnyOf: readableTargetRequirement, capability: "query.execute")
             add(["mutate", language], 1...1, usage: "<statement|@path|@->", summary: "Execute a mutating \(language.uppercased()) statement.", options: remoteOptions(
                 budget: true,
                 parameters: true,

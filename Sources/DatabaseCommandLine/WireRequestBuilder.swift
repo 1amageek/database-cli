@@ -13,6 +13,7 @@ struct WireRequestBuilder: Sendable {
         try ExecutionOptions(options: command.options)
     }
 
+    #if DATABASE_CLI_MULTIPLE_BASES
     func operationTarget(
         _ command: ParsedCommand
     ) throws -> DatabaseOperationTarget {
@@ -123,34 +124,6 @@ struct WireRequestBuilder: Sendable {
                 ),
                 idempotencyKey: try requiredIdempotencyKey(command.options)
             )
-        case ["base", "legacy-migration", "plan"]:
-            let id = try baseID(command.positionals[0])
-            invocation = .legacyMigrationPlan(
-                baseID: id,
-                placementID: try requiredPlacementID(command.options),
-                initialGrants: try initialGrants(
-                    command.options.values("initial-grant"),
-                    baseID: id
-                )
-            )
-        case ["base", "legacy-migration", "apply"]:
-            let id = try baseID(command.positionals[0])
-            invocation = .legacyMigrationApply(
-                baseID: id,
-                placementID: try requiredPlacementID(command.options),
-                initialGrants: try initialGrants(
-                    command.options.values("initial-grant"),
-                    baseID: id
-                ),
-                expectedLayoutFingerprint: try layoutFingerprint(
-                    command.options.value("expected-layout-fingerprint")
-                ),
-                expectedRevision: try requiredUInt64(
-                    "expected-revision",
-                    command.options
-                ),
-                idempotencyKey: try requiredIdempotencyKey(command.options)
-            )
         default:
             throw DatabaseCLIError(.input, "Unsupported Base command")
         }
@@ -238,6 +211,7 @@ struct WireRequestBuilder: Sendable {
         }
         return GrantExecuteOperation.Request(invocation: invocation)
     }
+    #endif
 
     func queryInput(
         language: QueryExecuteOperation.Language,
@@ -792,6 +766,7 @@ struct WireRequestBuilder: Sendable {
 }
 
 private extension WireRequestBuilder {
+    #if DATABASE_CLI_MULTIPLE_BASES
     func readableTarget(
         _ options: CommandOptions
     ) throws -> DatabaseOperationTarget {
@@ -807,7 +782,10 @@ private extension WireRequestBuilder {
         if let composition {
             return .composition(try compositionID(composition))
         }
-        return .database
+        throw DatabaseCLIError(
+            .input,
+            "Read operation requires '--base <id>' or '--composition <id>' when MultipleBases is enabled"
+        )
     }
 
     func administrativeTarget(
@@ -828,7 +806,10 @@ private extension WireRequestBuilder {
         _ options: CommandOptions
     ) throws -> DatabaseOperationTarget {
         guard let raw = options.value("base") else {
-            return .database
+            throw DatabaseCLIError(
+                .input,
+                "Data operation requires '--base <id>' when MultipleBases is enabled"
+            )
         }
         return .base(try baseID(raw))
     }
@@ -1073,26 +1054,7 @@ private extension WireRequestBuilder {
         return value
     }
 
-    func layoutFingerprint(
-        _ raw: String?
-    ) throws -> DatabaseLayoutFingerprint {
-        guard let raw else {
-            throw DatabaseCLIError(
-                .input,
-                "Command requires '--expected-layout-fingerprint'"
-            )
-        }
-        do {
-            return try DatabaseLayoutFingerprint(Base64URL.decode(raw))
-        } catch let error as DatabaseCLIError {
-            throw error
-        } catch {
-            throw DatabaseCLIError(
-                .input,
-                "Invalid layout fingerprint: \(error)"
-            )
-        }
-    }
+    #endif
 
     func schemaFingerprint(_ value: String) throws -> SchemaFingerprint {
         do {

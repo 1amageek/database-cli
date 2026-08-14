@@ -29,7 +29,8 @@
 - Use `scripts/xcode-test-harness` with the pinned Swift snapshot and an
   external timeout. The harness must report exact counts and zero skips,
   expected failures, runtime warnings, or internal tool errors. The reviewed
-  contract is 62 logical tests: 55 core CLI tests and 7 FDB companion tests.
+  standard contract is 47 logical tests. An isolated `MultipleBases` graph
+  uses `DATABASE_CLI_EXPECTED_TEST_COUNT=61` and requires 61 logical tests.
 - Use `scripts/process-test-harness` with adjacent, version-matched
   `database`, `database-fdb`, and `database-server` executables. It owns a
   disposable `DATABASE_CLI_CONFIG_HOME`, profile, Keychain credential, and

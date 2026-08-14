@@ -8,6 +8,9 @@ let package = Package(
         .executable(name: "database", targets: ["DatabaseCLIExecutable"]),
         .executable(name: "database-fdb", targets: ["DatabaseFDBExecutable"]),
     ],
+    traits: [
+        .trait(name: "MultipleBases"),
+    ],
     dependencies: [
         .package(
             url: "https://github.com/1amageek/database-types.git",
@@ -15,11 +18,23 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-kit.git",
-            from: "26.0812.1"
+            from: "26.0814.0",
+            traits: [
+                .trait(
+                    name: "MultipleBases",
+                    condition: .when(traits: ["MultipleBases"])
+                ),
+            ]
         ),
         .package(
             url: "https://github.com/1amageek/database-client.git",
-            from: "26.0812.0"
+            from: "26.0814.0",
+            traits: [
+                .trait(
+                    name: "MultipleBases",
+                    condition: .when(traits: ["MultipleBases"])
+                ),
+            ]
         ),
         .package(
             url: "https://github.com/1amageek/storage-kit.git",
@@ -31,9 +46,24 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-framework.git",
-            from: "26.0812.1",
+            from: "26.0814.0",
             traits: [
                 .trait(name: "AllRuntimeFeatures"),
+                .trait(
+                    name: "MultipleBases",
+                    condition: .when(traits: ["MultipleBases"])
+                ),
+            ]
+        ),
+        .package(
+            url: "https://github.com/1amageek/database-server.git",
+            from: "26.0814.0",
+            traits: [
+                .trait(name: "GraphIndexes"),
+                .trait(
+                    name: "MultipleBases",
+                    condition: .when(traits: ["MultipleBases"])
+                ),
             ]
         ),
         .package(
@@ -68,6 +98,12 @@ let package = Package(
                 .product(name: "DatabaseClientFramedStream", package: "database-client"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
+            ],
+            swiftSettings: [
+                .define(
+                    "DATABASE_CLI_MULTIPLE_BASES",
+                    .when(traits: ["MultipleBases"])
+                ),
             ]
         ),
         .executableTarget(
@@ -107,15 +143,20 @@ let package = Package(
                 "DatabaseCommandLine",
                 .product(name: "DatabaseEngine", package: "database-framework"),
                 .product(name: "DatabaseRuntime", package: "database-framework"),
-                .product(name: "DatabaseOperations", package: "database-framework"),
-                .product(name: "DatabaseWireAdapter", package: "database-framework"),
-                .product(name: "DatabaseFoundation", package: "database-framework"),
+                .product(name: "DatabaseServerRuntime", package: "database-server"),
+                .product(name: "DatabaseServerFoundation", package: "database-server"),
                 .product(name: "DatabaseTypes", package: "database-types"),
                 .product(name: "DatabaseKit", package: "database-kit"),
                 .product(name: "DatabaseWire", package: "database-kit"),
                 .product(name: "StorageKit", package: "storage-kit"),
                 .product(name: "StorageKitSystemClock", package: "storage-kit"),
                 .product(name: "SQLiteStorage", package: "storage-kit"),
+            ],
+            swiftSettings: [
+                .define(
+                    "DATABASE_CLI_MULTIPLE_BASES",
+                    .when(traits: ["MultipleBases"])
+                ),
             ]
         ),
         .testTarget(

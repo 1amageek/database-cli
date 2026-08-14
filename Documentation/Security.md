@@ -44,8 +44,9 @@ The PostgreSQL password value is never accepted through argv, environment
 variables, profiles, or server configuration. `--postgres-password-file`
 passes only a path; the Server opens the target without following the final
 symbolic link and requires an owner-owned mode-`0600` regular file. The
-FoundationDB production backend requires an explicit cluster file and never
-opens the system default cluster as a fallback.
+FoundationDB production backend requires an explicit cluster file and a
+non-empty ordered Directory path. It never opens the system default cluster or
+selects a default Directory as a fallback.
 
 ## Files
 

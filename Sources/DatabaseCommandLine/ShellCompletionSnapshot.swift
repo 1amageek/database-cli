@@ -109,12 +109,16 @@ private extension ShellCompletionSnapshot {
         into entries: inout Set<ShellCompletionEntry>,
         profiles: [String]
     ) {
-        for command in [
-            "\\help", "\\profile", "\\database", "\\base", "\\composition", "\\output",
+        var commands = [
+            "\\help", "\\profile", "\\database", "\\output",
             "\\timing", "\\budget",
             "\\page-size", "\\next", "\\history", "\\mode", "\\g",
             "\\clear", "\\quit",
-        ] {
+        ]
+        #if DATABASE_CLI_MULTIPLE_BASES
+        commands.append(contentsOf: ["\\base", "\\composition"])
+        #endif
+        for command in commands {
             entries.insert(.init(context: "", value: command))
         }
         for profile in profiles {

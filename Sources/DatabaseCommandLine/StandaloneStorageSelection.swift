@@ -44,7 +44,10 @@ struct StandaloneStorageSelection: Sendable, Equatable {
             )
         }
         if memory {
-            return Self(serverArguments: ["--storage", "sqlite", "--memory"])
+            return Self(
+                serverArguments: ["--storage", "sqlite", "--memory"]
+                    + (try multipleBasesNamespaceArguments(command, backend: .sqlite))
+            )
         }
         guard let path else {
             throw DatabaseCLIError(.input, "SQLite database path is required")
@@ -53,7 +56,7 @@ struct StandaloneStorageSelection: Sendable, Equatable {
             serverArguments: [
                 "--storage", "sqlite",
                 "--path", URL(fileURLWithPath: path).standardizedFileURL.path,
-            ]
+            ] + (try multipleBasesNamespaceArguments(command, backend: .sqlite))
         )
     }
 
@@ -131,6 +134,10 @@ struct StandaloneStorageSelection: Sendable, Equatable {
             "--postgres-schema-management", schemaManagement,
             "--postgres-tls", tls,
         ])
+        arguments.append(contentsOf: try multipleBasesNamespaceArguments(
+            command,
+            backend: .postgreSQL
+        ))
         return Self(serverArguments: arguments)
     }
 
@@ -143,12 +150,28 @@ struct StandaloneStorageSelection: Sendable, Equatable {
                 "FoundationDB requires '--fdb-cluster-file'"
             )
         }
+        let directory = command.options.values("fdb-directory")
+        guard !directory.isEmpty,
+              directory.allSatisfy({ !$0.isEmpty }) else {
+            throw DatabaseCLIError(
+                .input,
+                "FoundationDB requires at least one '--fdb-directory <component>'"
+            )
+        }
+        var arguments = [
+            "--storage", "foundationdb",
+            "--fdb-cluster-file",
+            URL(fileURLWithPath: clusterFile).standardizedFileURL.path,
+        ]
+        for component in directory {
+            arguments.append(contentsOf: ["--fdb-directory", component])
+        }
+        arguments.append(contentsOf: try multipleBasesNamespaceArguments(
+            command,
+            backend: .foundationDB
+        ))
         return Self(
-            serverArguments: [
-                "--storage", "foundationdb",
-                "--fdb-cluster-file",
-                URL(fileURLWithPath: clusterFile).standardizedFileURL.path,
-            ]
+            serverArguments: arguments
         )
     }
 
@@ -174,13 +197,59 @@ struct StandaloneStorageSelection: Sendable, Equatable {
         }
     }
 
+    private static func multipleBasesNamespaceArguments(
+        _ command: ParsedCommand,
+        backend: Backend
+    ) throws -> [String] {
+        #if DATABASE_CLI_MULTIPLE_BASES
+        let components = command.options.values("domain-namespace")
+        if backend == .foundationDB {
+            guard components.isEmpty else {
+                throw DatabaseCLIError(
+                    .input,
+                    "FoundationDB uses '--fdb-directory', not '--domain-namespace'"
+                )
+            }
+            return []
+        }
+        guard !components.isEmpty,
+              components.allSatisfy({ !$0.isEmpty }) else {
+            throw DatabaseCLIError(
+                .input,
+                "MultipleBases requires at least one '--domain-namespace <component>'"
+            )
+        }
+        var arguments: [String] = []
+        arguments.reserveCapacity(components.count * 2)
+        for component in components {
+            arguments.append(contentsOf: ["--domain-namespace", component])
+        }
+        return arguments
+        #else
+        _ = command
+        _ = backend
+        return []
+        #endif
+    }
+
     private static let postgreSQLOptionNames = [
         "postgres-host", "postgres-port", "postgres-unix-socket",
         "postgres-user", "postgres-password-file", "postgres-database",
         "postgres-table", "postgres-schema-management", "postgres-tls",
     ]
-    private static let foundationDBOptionNames = ["fdb-cluster-file"]
-    private static let localOptionNames = ["storage", "memory"]
-        + postgreSQLOptionNames
-        + foundationDBOptionNames
+    private static let foundationDBOptionNames = [
+        "fdb-cluster-file", "fdb-directory",
+    ]
+    private static var localOptionNames: [String] {
+        #if DATABASE_CLI_MULTIPLE_BASES
+        ["storage", "memory"]
+            + postgreSQLOptionNames
+            + foundationDBOptionNames
+            + ["domain-namespace"]
+        #else
+        ["storage", "memory"]
+            + postgreSQLOptionNames
+            + foundationDBOptionNames
+        #endif
+    }
 }

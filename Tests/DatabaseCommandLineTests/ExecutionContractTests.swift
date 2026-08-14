@@ -7,9 +7,8 @@ import Testing
 
 @Test("Execution budget and metadata map one-to-one")
 func mapsExecutionContract() throws {
-    let command = try CommandParser().parse([
+    var arguments = [
         "query", "sql", "SELECT 1",
-        "--base", "company-a",
         "--trace-id", "trace-1",
         "--idempotency-key", "request-1",
         "--maximum-rows", "11",
@@ -18,7 +17,11 @@ func mapsExecutionContract() throws {
         "--maximum-intermediate-bytes", "14",
         "--timeout-milliseconds", "15",
         "--page-size", "16",
-    ])
+    ]
+    #if DATABASE_CLI_MULTIPLE_BASES
+    arguments += ["--base", "company-a"]
+    #endif
+    let command = try CommandParser().parse(arguments)
     let execution = try ExecutionOptions(options: command.options)
     #expect(execution.metadata.traceID == "trace-1")
     #expect(execution.metadata.idempotencyKey == "request-1")
@@ -95,6 +98,7 @@ func rejectsIncompatibleOutput() throws {
             diagnosticHandle: FileHandle.nullDevice
         )
     )
+    #if DATABASE_CLI_MULTIPLE_BASES
     let result = try QueryBooleanResult(
         value: true,
         provenance: nil,
@@ -102,6 +106,9 @@ func rejectsIncompatibleOutput() throws {
             try DomainReadPoint(domainID: "primary", position: .version(1))
         )
     )
+    #else
+    let result = true
+    #endif
     #expect(throws: DatabaseCLIError.self) {
         try renderer.renderQuery(.boolean(result), format: .csv)
     }
@@ -110,6 +117,7 @@ func rejectsIncompatibleOutput() throws {
     }
 }
 
+#if DATABASE_CLI_MULTIPLE_BASES
 @Test("Composition rows stream provenance and consistency without materializing the page")
 func rendersCompositionProvenance() throws {
     let temporary = FileManager.default.temporaryDirectory
@@ -154,3 +162,4 @@ func rendersCompositionProvenance() throws {
     #expect(output.contains("\"$consistency\""))
     #expect(output.contains("\"type\":\"federated\""))
 }
+#endif

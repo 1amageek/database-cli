@@ -106,11 +106,11 @@ exec > >(tee "$log_path") 2>&1
 
   status="$(run_and_capture version "$DATABASE" --version)"
   [[ "$status" == "0" ]]
-  [[ "$(tr -d '\n' <"$WORK_ROOT/version.stdout")" == "26.0812.1" ]]
+  [[ "$(tr -d '\n' <"$WORK_ROOT/version.stdout")" == "26.0814.0" ]]
 
   status="$(run_and_capture delegated-version "$DATABASE" fdb --version)"
   [[ "$status" == "0" ]]
-  [[ "$(tr -d '\n' <"$WORK_ROOT/delegated-version.stdout")" == "26.0812.1" ]]
+  [[ "$(tr -d '\n' <"$WORK_ROOT/delegated-version.stdout")" == "26.0814.0" ]]
   [[ ! -s "$WORK_ROOT/delegated-version.stderr" ]]
 
   status="$(run_and_capture helper-invalid "$DATABASE" fdb invalid command)"
@@ -150,8 +150,7 @@ exec > >(tee "$log_path") 2>&1
   rg -q '^Database shell ' "$WORK_ROOT/shell.stderr"
 
   set +e
-  printf '%s\n' '\mode command' 'capabilities' '\base company-a' \
-    'grant direct --database-target' '\quit' \
+  printf '%s\n' '\mode command' 'capabilities' '\quit' \
     | "$DATABASE" open --memory \
       >"$WORK_ROOT/open-memory.stdout" \
       2>"$WORK_ROOT/open-memory.stderr"
@@ -160,7 +159,6 @@ exec > >(tee "$log_path") 2>&1
   [[ "$status" == "0" ]]
   rg -q '"identifier":"schema.execute","version":"1"' \
     "$WORK_ROOT/open-memory.stdout"
-  rg -q '"type":"directGrants"' "$WORK_ROOT/open-memory.stdout"
   rg -q '^Database shell ' "$WORK_ROOT/open-memory.stderr"
   if pgrep -f "$SERVER" >/dev/null; then
     echo "error: database-server survived database open shutdown" >&2

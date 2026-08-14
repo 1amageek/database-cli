@@ -138,12 +138,15 @@ func rejectsInvalidScalarLiteral(_ literal: String) {
 
 @Test("Repeatable scalar bindings become the canonical parameter model")
 func scalarBindingsBuildCanonicalParameters() throws {
-    let command = try CommandParser().parse([
+    var arguments = [
         "query", "sql", "SELECT $1, :name",
-        "--base", "company-a",
         "--parameter", "$1=int64:42",
         "--parameter", "name=string:alice",
-    ])
+    ]
+    #if DATABASE_CLI_MULTIPLE_BASES
+    arguments += ["--base", "company-a"]
+    #endif
+    let command = try CommandParser().parse(arguments)
 
     let parameters = try WireRequestBuilder().parameters(command.options)
 

@@ -79,6 +79,7 @@ struct RemoteCommandExecutor: Sendable {
                     metadata: execution.metadata
                 )
             )
+        #if DATABASE_CLI_MULTIPLE_BASES
         case let path where path.first == "base":
             try renderer.renderBaseExecution(
                 try await targetedClient(command).execute(
@@ -103,6 +104,7 @@ struct RemoteCommandExecutor: Sendable {
                     metadata: execution.metadata
                 )
             )
+        #endif
         case ["inspect", "overview"]:
             try rejectJobOption(command)
             async let capabilities = databaseClient.execute(
@@ -309,14 +311,19 @@ struct RemoteCommandExecutor: Sendable {
 }
 
 private extension RemoteCommandExecutor {
-    var databaseClient: TargetedDatabaseClient<AnyDatabaseTransport> {
+    var databaseClient: DatabaseSessionClient<AnyDatabaseTransport> {
         session.client.database
     }
 
     func targetedClient(
         _ command: ParsedCommand
-    ) throws -> TargetedDatabaseClient<AnyDatabaseTransport> {
+    ) throws -> DatabaseSessionClient<AnyDatabaseTransport> {
+        #if DATABASE_CLI_MULTIPLE_BASES
         session.client.targeting(try builder.operationTarget(command))
+        #else
+        _ = command
+        return databaseClient
+        #endif
     }
 
     struct PageTotals {
@@ -756,6 +763,7 @@ private extension RemoteCommandExecutor {
         let job = try jobIdentity(command)
         let client = try targetedClient(command)
         switch job.operation.family {
+        #if DATABASE_CLI_MULTIPLE_BASES
         case .baseExecute:
             try renderer.renderBaseExecution(
                 try await client.jobResult(
@@ -766,6 +774,7 @@ private extension RemoteCommandExecutor {
                     metadata: execution.metadata
                 )
             )
+        #endif
         case .schemaExecute:
             try renderer.renderSchemaExecution(
                 try await client.jobResult(
@@ -852,9 +861,15 @@ private extension RemoteCommandExecutor {
                 ),
                 format: format
             )
+        #if DATABASE_CLI_MULTIPLE_BASES
         case .capabilitiesDescribe, .schemaDescribe, .compositionExecute,
              .grantExecute, .jobStart, .jobStatus, .jobResult, .jobCancel:
             throw DatabaseCLIError(.input, "Operation family does not support jobs")
+        #else
+        case .capabilitiesDescribe, .schemaDescribe, .jobStart, .jobStatus,
+             .jobResult, .jobCancel:
+            throw DatabaseCLIError(.input, "Operation family does not support jobs")
+        #endif
         }
     }
 
@@ -866,6 +881,7 @@ private extension RemoteCommandExecutor {
         }
         let family = try operationFamily(command.positionals[1])
         do {
+            #if DATABASE_CLI_MULTIPLE_BASES
             return JobIdentity(
                 jobID: identifier,
                 operation: try JobOperationIdentifier(
@@ -874,6 +890,15 @@ private extension RemoteCommandExecutor {
                 ),
                 target: try builder.operationTarget(command)
             )
+            #else
+            return JobIdentity(
+                jobID: identifier,
+                operation: try JobOperationIdentifier(
+                    family: family,
+                    kind: command.positionals[2]
+                )
+            )
+            #endif
         } catch {
             throw DatabaseCLIError(.input, "Invalid job operation: \(error)")
         }
@@ -892,9 +917,11 @@ private extension RemoteCommandExecutor {
         case .capabilitiesDescribe: "capabilitiesDescribe"
         case .schemaDescribe: "schemaDescribe"
         case .schemaExecute: "schemaExecute"
+        #if DATABASE_CLI_MULTIPLE_BASES
         case .baseExecute: "baseExecute"
         case .compositionExecute: "compositionExecute"
         case .grantExecute: "grantExecute"
+        #endif
         case .queryExecute: "queryExecute"
         case .mutationExecute: "mutationExecute"
         case .graphAlgorithm: "graphAlgorithm"

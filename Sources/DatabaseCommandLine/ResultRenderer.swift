@@ -80,6 +80,7 @@ public struct ResultRenderer: Sendable {
             guard format != .csv && format != .nquads else {
                 throw DatabaseCLIError(.input, "Boolean results do not support \(format.rawValue) output")
             }
+            #if DATABASE_CLI_MULTIPLE_BASES
             let provenance = try result.provenance.map { provenance in
                 var iterator = provenance.makeOriginIterator()
                 guard let origin = try iterator.next(),
@@ -118,6 +119,22 @@ public struct ResultRenderer: Sendable {
                 byteCount: byteCount,
                 continuation: nil
             )
+            #else
+            let text: String
+            if format == .json || format == .jsonl {
+                text = StrictJSONWriter.encode(.object([
+                    ("$type", .string("bool")),
+                    ("value", .bool(result)),
+                ])) + "\n"
+            } else {
+                text = "\(result)\n"
+            }
+            return RenderedPage(
+                elementCount: 1,
+                byteCount: UInt64(try output.result(text)),
+                continuation: nil
+            )
+            #endif
         case .rows(let page):
             return try renderRows(
                 page,
@@ -142,14 +159,18 @@ public struct ResultRenderer: Sendable {
             throw DatabaseCLIError(.input, "N-Quads output requires an RDF result")
         }
         var iterator = page.makeRowIterator()
+        #if DATABASE_CLI_MULTIPLE_BASES
         var originIterator = page.provenance?.makeOriginIterator()
+        #endif
         var count: UInt64 = 0
         var bytes: UInt64 = 0
         if format == .json, jsonFraming.opensCollection {
             bytes += UInt64(try output.result("["))
         } else if format == .table {
             var columns = page.columns.map(\.name)
+            #if DATABASE_CLI_MULTIPLE_BASES
             if page.provenance != nil { columns.append("$provenance") }
+            #endif
             bytes += UInt64(
                 try output.result(
                     columns.joined(separator: "\t") + "\n"
@@ -157,7 +178,9 @@ public struct ResultRenderer: Sendable {
             )
         } else if format == .csv {
             var columns = page.columns.map { csvEscape($0.name) }
+            #if DATABASE_CLI_MULTIPLE_BASES
             if page.provenance != nil { columns.append("$provenance") }
+            #endif
             bytes += UInt64(
                 try output.result(
                     columns.joined(separator: ",") + "\n"
@@ -166,10 +189,14 @@ public struct ResultRenderer: Sendable {
         }
         while let row = try iterator.next() {
             try elementQuota?.reserveOne()
+            #if DATABASE_CLI_MULTIPLE_BASES
             let provenanceNode = try rowProvenanceNode(
                 page.provenance,
                 iterator: &originIterator
             )
+            #else
+            let provenanceNode: StrictJSONValue? = nil
+            #endif
             let encoded: String
             switch format {
             case .jsonl:
@@ -206,16 +233,27 @@ public struct ResultRenderer: Sendable {
             bytes += UInt64(try output.result(encoded))
             count += 1
         }
+        #if DATABASE_CLI_MULTIPLE_BASES
         try requireOriginsExhausted(&originIterator)
+        #endif
         if format == .json, jsonFraming.closesCollection {
             bytes += UInt64(try output.result("]\n"))
         }
+        #if DATABASE_CLI_MULTIPLE_BASES
         try renderPageMetadata(
             continuation: page.continuation,
             consistency: page.consistency,
             format: format,
             bytes: &bytes
         )
+        #else
+        try renderPageMetadata(
+            continuation: page.continuation,
+            snapshotVersion: page.snapshotVersion.map { String($0) },
+            format: format,
+            bytes: &bytes
+        )
+        #endif
         return RenderedPage(
             elementCount: count,
             byteCount: bytes,
@@ -234,15 +272,19 @@ public struct ResultRenderer: Sendable {
                 "RDF results support only nquads, jsonl, or json output"
             )
         }
+        #if DATABASE_CLI_MULTIPLE_BASES
         guard format != .nquads || page.provenance == nil else {
             throw DatabaseCLIError(
                 .input,
                 "N-Quads output cannot preserve Composition provenance; use jsonl or json"
             )
         }
+        #endif
         let nquads = NQuadsEncoder()
         var iterator = page.makeQuadIterator()
+        #if DATABASE_CLI_MULTIPLE_BASES
         var originIterator = page.provenance?.makeOriginIterator()
+        #endif
         var count: UInt64 = 0
         var bytes: UInt64 = 0
         if format == .json, jsonFraming.opensCollection {
@@ -250,10 +292,14 @@ public struct ResultRenderer: Sendable {
         }
         while let quad = try iterator.next() {
             try elementQuota?.reserveOne()
+            #if DATABASE_CLI_MULTIPLE_BASES
             let provenanceNode = try rowProvenanceNode(
                 page.provenance,
                 iterator: &originIterator
             )
+            #else
+            let provenanceNode: StrictJSONValue? = nil
+            #endif
             let encoded: String
             if format == .nquads {
                 encoded = try nquads.format(quad) + "\n"
@@ -286,16 +332,27 @@ public struct ResultRenderer: Sendable {
             bytes += UInt64(try output.result(encoded))
             count += 1
         }
+        #if DATABASE_CLI_MULTIPLE_BASES
         try requireOriginsExhausted(&originIterator)
+        #endif
         if format == .json, jsonFraming.closesCollection {
             bytes += UInt64(try output.result("]\n"))
         }
+        #if DATABASE_CLI_MULTIPLE_BASES
         try renderPageMetadata(
             continuation: page.continuation,
             consistency: page.consistency,
             format: format,
             bytes: &bytes
         )
+        #else
+        try renderPageMetadata(
+            continuation: page.continuation,
+            snapshotVersion: page.snapshotVersion.map { String($0) },
+            format: format,
+            bytes: &bytes
+        )
+        #endif
         return RenderedPage(
             elementCount: count,
             byteCount: bytes,
@@ -332,6 +389,7 @@ public struct ResultRenderer: Sendable {
         return StrictJSONWriter.encode(.object(fields))
     }
 
+    #if DATABASE_CLI_MULTIPLE_BASES
     private func rowProvenanceNode(
         _ provenance: CompositionPageProvenance?,
         iterator: inout CompositionOriginIterator?
@@ -384,6 +442,7 @@ public struct ResultRenderer: Sendable {
             ])
         }
     }
+    #endif
 
     private func tableJSON(_ node: StrictJSONValue) -> String {
         StrictJSONWriter.encode(node)
@@ -414,6 +473,7 @@ public struct ResultRenderer: Sendable {
         return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
     }
 
+    #if DATABASE_CLI_MULTIPLE_BASES
     private func renderPageMetadata(
         continuation: ByteString?,
         consistency: DatabaseReadConsistency,
@@ -469,5 +529,28 @@ public struct ResultRenderer: Sendable {
             ("position", position),
         ])
     }
+    #else
+    private func renderPageMetadata(
+        continuation: ByteString?,
+        snapshotVersion: String?,
+        format: OutputFormat,
+        bytes: inout UInt64
+    ) throws {
+        guard continuation != nil || snapshotVersion != nil else { return }
+        let metadata = StrictJSONWriter.encode(.object([
+            ("$continuation", continuation.map {
+                .string(Base64URL.encode($0))
+            } ?? .null),
+            ("$snapshotVersion", snapshotVersion.map {
+                .string($0)
+            } ?? .null),
+        ]))
+        if format == .jsonl {
+            bytes += UInt64(try output.result(metadata + "\n"))
+        } else {
+            output.diagnostic(metadata + "\n")
+        }
+    }
+    #endif
 
 }
