@@ -5,7 +5,7 @@ It provides one-shot commands, an explicit interactive shell, lossless typed
 input and output, bounded pagination, and a separately linked FoundationDB
 diagnostic companion.
 
-Current development version: `26.0814.0`
+Current development version: `26.0817.0`
 
 ```mermaid
 flowchart LR
@@ -13,8 +13,8 @@ flowchart LR
     Client --> Host["database-server<br/>HTTP / WebSocket / stdio"]
     Host --> Wire["DatabaseWire v2<br/>14 operation identifiers"]
     Wire -. "MultipleBases: v3 / 17 operations" .-> Optional["Base + Composition + persisted Grant"]
-    Wire --> Runtime["DatabaseOperationInstance"]
-    Runtime --> Container["DBContainer<br/>database data root"]
+    Wire --> Runtime["internal server dispatch"]
+    Runtime --> Container["database-framework / DBContainer"]
     Container -. "MultipleBases trait" .-> Bases["Base isolation<br/>Composition reads"]
 
     CLI --> Helper["database-fdb<br/>version-matched companion"]
@@ -537,8 +537,8 @@ scripts/xcode-test-harness
 The harness resolves URL dependencies without using Xcode's shared repository
 cache, builds once, injects the matching Swift Testing runtime, and runs the
 generated `.xctestrun` without rebuilding. The reviewed standard contract is
-47 logical tests. An isolated `MultipleBases` graph uses
-`DATABASE_CLI_EXPECTED_TEST_COUNT=61` and requires 61 tests. Both require zero
+45 logical tests. Set `DATABASE_CLI_TEST_TRAITS=MultipleBases` to select that
+trait in an isolated source copy and require 59 tests. Both graphs require zero
 failures, zero skips, zero expected failures, zero runtime warnings, and no
 internal tool errors.
 

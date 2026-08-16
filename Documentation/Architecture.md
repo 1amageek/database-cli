@@ -17,14 +17,13 @@ DatabaseCLIExecutable
     ├── DatabaseClientFramedStream
     └── DatabaseWire
 
-DatabaseServerExecutable
-└── DatabaseServerHost
-    ├── DatabaseOperationApplication
-    ├── DatabaseServerRuntime
-    ├── DatabaseOperationInstance
-    ├── SQLiteStorage
-    ├── PostgreSQLStorage
-    └── FDBStorage
+database-server executable
+├── internal native host
+├── internal DatabaseWire operation runtime
+├── internal operation dispatch
+├── SQLiteStorage
+├── PostgreSQLStorage
+└── FDBStorage
 
 DatabaseFDBExecutable
 ├── DatabaseCommandLine
@@ -49,7 +48,7 @@ argv or shell line
         -> ResolvedConnection
             -> HTTP or WebSocket transport selected by URL scheme
                 -> DatabaseClient request identifier and wire frame
-                    -> one of 17 canonical DatabaseWire operations
+                    -> one of 14 canonical DatabaseWire operations
                         -> incremental result renderer
 ```
 

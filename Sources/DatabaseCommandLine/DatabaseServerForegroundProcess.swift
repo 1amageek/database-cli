@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 
 struct DatabaseServerForegroundProcess: Sendable {
-    let executable: DatabaseServerExecutable
+    let executable: DatabaseServerInstallation
 
     func run(
         configurationURL: URL,

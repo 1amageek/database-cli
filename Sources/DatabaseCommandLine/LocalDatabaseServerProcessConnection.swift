@@ -33,7 +33,7 @@ actor LocalDatabaseServerProcessConnection:
     private var shutdownWaiters: [CheckedContinuation<Void, Never>] = []
 
     static func launch(
-        executable: DatabaseServerExecutable,
+        executable: DatabaseServerInstallation,
         arguments: [String]
     ) async throws -> LocalDatabaseServerProcessConnection {
         try await executable.validateVersion(expected: DatabaseCLIVersion.current)

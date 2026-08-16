@@ -476,7 +476,7 @@ struct WireRequestBuilder: Sendable {
                 )
             )
         }
-        let kind: MutationExecuteOperation.Kind
+        let kind: EntityMutationKind
         switch command.path.last {
         case "insert": kind = .insert
         case "update": kind = .update
@@ -508,7 +508,7 @@ struct WireRequestBuilder: Sendable {
         }
         return MutationExecuteOperation.Request(
             input: .entities([
-                MutationExecuteOperation.Change(
+                EntityMutationChange(
                     kind: kind,
                     identity: identity,
                     fields: fields
@@ -1083,7 +1083,7 @@ private extension WireRequestBuilder {
     func preconditions(
         identity: EntityReference,
         options: CommandOptions
-    ) throws -> [MutationExecuteOperation.Precondition] {
+    ) throws -> [EntityMutationPrecondition] {
         let selected = [
             options.value("expected-version") != nil,
             options.contains("must-exist"),
@@ -1126,10 +1126,10 @@ private extension WireRequestBuilder {
         )
     }
 
-    func entityChange(_ node: StrictJSONValue) throws -> MutationExecuteOperation.Change {
+    func entityChange(_ node: StrictJSONValue) throws -> EntityMutationChange {
         let object = try StrictJSONObject(node)
         try object.validateKeys(["kind", "identity", "fields"])
-        let kind: MutationExecuteOperation.Kind
+        let kind: EntityMutationKind
         switch try object.required("kind").string(named: "kind") {
         case "insert": kind = .insert
         case "update": kind = .update
@@ -1154,12 +1154,12 @@ private extension WireRequestBuilder {
         } else {
             fields = FieldObject()
         }
-        return MutationExecuteOperation.Change(kind: kind, identity: identity, fields: fields)
+        return EntityMutationChange(kind: kind, identity: identity, fields: fields)
     }
 
     func entityPrecondition(
         _ node: StrictJSONValue
-    ) throws -> MutationExecuteOperation.Precondition {
+    ) throws -> EntityMutationPrecondition {
         let object = try StrictJSONObject(node)
         try object.validateKeys(["kind", "identity", "version"])
         let identityValue = try fieldDecoder.decode(

@@ -13,7 +13,7 @@ local configuration commands
     -> profile / credential / completion files
 
 remote database commands
-    -> DatabaseClient -> DatabaseWire operation -> DatabaseOperationInstance
+    -> DatabaseClient -> DatabaseWire operation -> configured server endpoint
 
 standalone commands
     -> adjacent version-matched database-server process

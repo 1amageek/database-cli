@@ -4,7 +4,7 @@ import Foundation
 import Synchronization
 
 public enum DatabaseCLIVersion {
-    public static let current = "26.0814.0"
+    public static let current = "26.0817.0"
 }
 
 public typealias RemoteSessionFactory = @Sendable (
@@ -142,7 +142,7 @@ extension DatabaseCLIApplication {
             )
         }
         let local = try await LocalDatabaseSession.open(
-            executable: DatabaseServerExecutable.adjacent(),
+            executable: DatabaseServerInstallation.adjacent(),
             storage: storage,
             maximumFrameBytes: maximumFrameBytes
         )
@@ -211,7 +211,7 @@ extension DatabaseCLIApplication {
         try SecureLocalFile.ensureDirectory(
             configurationURL.deletingLastPathComponent()
         )
-        let executable = try DatabaseServerExecutable.adjacent()
+        let executable = try DatabaseServerInstallation.adjacent()
         let originalDocument = try profiles.load()
         let originalStoredToken = try credentials.storedToken(
             profile: profileName

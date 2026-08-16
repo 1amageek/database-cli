@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-struct DatabaseServerExecutable: Sendable {
+struct DatabaseServerInstallation: Sendable {
     let url: URL
 
     static func adjacent() throws -> Self {
@@ -141,10 +141,10 @@ struct DatabaseServerExecutable: Sendable {
 
 private actor DatabaseServerVersionCheckTermination {
     private var status: Int32?
-    private var outcome: DatabaseServerExecutable.TerminationOutcome?
+    private var outcome: DatabaseServerInstallation.TerminationOutcome?
     private var statusWaiters: [CheckedContinuation<Int32, Never>] = []
     private var outcomeWaiters: [CheckedContinuation<
-        DatabaseServerExecutable.TerminationOutcome,
+        DatabaseServerInstallation.TerminationOutcome,
         Never
     >] = []
 
@@ -173,7 +173,7 @@ private actor DatabaseServerVersionCheckTermination {
         }
     }
 
-    func waitForOutcome() async -> DatabaseServerExecutable.TerminationOutcome {
+    func waitForOutcome() async -> DatabaseServerInstallation.TerminationOutcome {
         if let outcome { return outcome }
         return await withCheckedContinuation { continuation in
             outcomeWaiters.append(continuation)
@@ -181,7 +181,7 @@ private actor DatabaseServerVersionCheckTermination {
     }
 
     private func finishOutcome(
-        _ outcome: DatabaseServerExecutable.TerminationOutcome
+        _ outcome: DatabaseServerInstallation.TerminationOutcome
     ) {
         self.outcome = outcome
         let waiters = outcomeWaiters

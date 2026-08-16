@@ -20,7 +20,7 @@ struct DatabaseServerBootstrap: Sendable {
         let workspaceID: String?
     }
 
-    let executable: DatabaseServerExecutable
+    let executable: DatabaseServerInstallation
 
     func prepare(
         request: Request,

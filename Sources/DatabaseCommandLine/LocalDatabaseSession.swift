@@ -4,7 +4,7 @@ struct LocalDatabaseSession: Sendable {
     let remoteSession: RemoteSession
 
     static func open(
-        executable: DatabaseServerExecutable,
+        executable: DatabaseServerInstallation,
         storage: StandaloneStorageSelection,
         maximumFrameBytes: Int
     ) async throws -> Self {

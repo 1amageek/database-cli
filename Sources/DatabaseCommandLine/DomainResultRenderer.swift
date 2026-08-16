@@ -1028,7 +1028,7 @@ private extension ResultRenderer {
         }
     }
 
-    func mutationKind(_ value: MutationExecuteOperation.Kind) -> String {
+    func mutationKind(_ value: EntityMutationKind) -> String {
         switch value {
         case .insert: "insert"
         case .update: "update"

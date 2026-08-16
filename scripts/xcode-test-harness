@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCHEME="database-cli-Package"
 DESTINATION="platform=macOS,arch=arm64"
-EXPECTED_TEST_COUNT="${DATABASE_CLI_EXPECTED_TEST_COUNT:-47}"
+TEST_TRAITS="${DATABASE_CLI_TEST_TRAITS:-}"
 BUILD_TIMEOUT_SECONDS="${XCODE_TEST_BUILD_TIMEOUT_SECONDS:-1200}"
 TEST_TIMEOUT_SECONDS="${XCODE_TEST_TIMEOUT_SECONDS:-1200}"
 RESULT_DIRECTORY="${XCODE_TEST_RESULT_DIRECTORY:-${TMPDIR:-/tmp}/database-cli-xcode-results}"
@@ -103,7 +103,21 @@ summary_number() {
   printf '%s' "$summary" | jq -er ".${key}"
 }
 
-for command in jq xcodebuild xcrun plutil perl rg tee; do
+case "$TEST_TRAITS" in
+  "")
+    default_expected_test_count=45
+    ;;
+  "MultipleBases")
+    default_expected_test_count=59
+    ;;
+  *)
+    echo "error: DATABASE_CLI_TEST_TRAITS must be empty or MultipleBases" >&2
+    exit 2
+    ;;
+esac
+EXPECTED_TEST_COUNT="${DATABASE_CLI_EXPECTED_TEST_COUNT:-$default_expected_test_count}"
+
+for command in jq xcodebuild xcrun plutil perl rg rsync tee; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "error: required command not found: $command" >&2
     exit 1
@@ -120,9 +134,16 @@ if [[ -z "${TOOLCHAINS:-}" ]]; then
   exit 2
 fi
 
-if [[ "${DATABASE_CLI_ALLOW_LOCAL_DEPENDENCIES:-0}" != "1" ]] \
-    && rg -n '\.package\(path:' "$ROOT_DIR/Package.swift" >/dev/null; then
-  echo "error: release verification requires URL dependencies" >&2
+has_local_dependencies=false
+if rg -n '\.package\(path:' "$ROOT_DIR/Package.swift" >/dev/null; then
+  has_local_dependencies=true
+  if [[ "${DATABASE_CLI_ALLOW_LOCAL_DEPENDENCIES:-0}" != "1" ]]; then
+    echo "error: release verification requires URL dependencies" >&2
+    exit 2
+  fi
+fi
+if [[ -n "$TEST_TRAITS" && "$has_local_dependencies" == true ]]; then
+  echo "error: isolated trait verification requires URL dependencies" >&2
   exit 2
 fi
 
@@ -133,6 +154,22 @@ else
   derived_data="$WORK_ROOT/DerivedData"
 fi
 mkdir -p "$derived_data" "$RESULT_DIRECTORY"
+build_root="$ROOT_DIR"
+if [[ -n "$TEST_TRAITS" ]]; then
+  source_root="$WORK_ROOT/source"
+  mkdir -p "$source_root"
+  rsync -a --delete \
+    --exclude '.git' \
+    --exclude '.build' \
+    --exclude '.swiftpm' \
+    --exclude '*.xcresult' \
+    "$ROOT_DIR/" "$source_root/"
+  perl -0pi -e '
+    my $insertions = s/(\n    traits: \[\n)/$1        .default(enabledTraits: ["MultipleBases"]),\n/s;
+    die "package trait list was not found\n" unless $insertions == 1;
+  ' "$source_root/Package.swift"
+  build_root="$source_root"
+fi
 run_identifier="$(date -u +%Y%m%d-%H%M%S)-$$"
 build_result="$RESULT_DIRECTORY/Build-$run_identifier.xcresult"
 test_result="$RESULT_DIRECTORY/Test-$run_identifier.xcresult"
@@ -141,7 +178,7 @@ test_log="$RESULT_DIRECTORY/Test-$run_identifier.log"
 
 set +e
 (
-  cd "$ROOT_DIR"
+  cd "$build_root"
   timeout_command "$BUILD_TIMEOUT_SECONDS" xcodebuild build-for-testing \
     -scheme "$SCHEME" \
     -destination "$DESTINATION" \
@@ -210,4 +247,5 @@ fi
 
 printf '%s\n' "$summary"
 echo "database-cli tests: $passed_count passed"
+echo "Additional traits: ${TEST_TRAITS:-none}"
 echo "Result directory: $RESULT_DIRECTORY"

@@ -18,7 +18,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-kit.git",
-            from: "26.0814.0",
+            from: "26.0817.0",
             traits: [
                 .trait(
                     name: "MultipleBases",
@@ -46,20 +46,9 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-framework.git",
-            from: "26.0814.0",
+            from: "26.0817.0",
             traits: [
                 .trait(name: "AllRuntimeFeatures"),
-                .trait(
-                    name: "MultipleBases",
-                    condition: .when(traits: ["MultipleBases"])
-                ),
-            ]
-        ),
-        .package(
-            url: "https://github.com/1amageek/database-server.git",
-            from: "26.0814.0",
-            traits: [
-                .trait(name: "GraphIndexes"),
                 .trait(
                     name: "MultipleBases",
                     condition: .when(traits: ["MultipleBases"])
@@ -141,16 +130,9 @@ let package = Package(
             name: "DatabaseCommandLineTests",
             dependencies: [
                 "DatabaseCommandLine",
-                .product(name: "DatabaseEngine", package: "database-framework"),
-                .product(name: "DatabaseRuntime", package: "database-framework"),
-                .product(name: "DatabaseServerRuntime", package: "database-server"),
-                .product(name: "DatabaseServerFoundation", package: "database-server"),
                 .product(name: "DatabaseTypes", package: "database-types"),
                 .product(name: "DatabaseKit", package: "database-kit"),
                 .product(name: "DatabaseWire", package: "database-kit"),
-                .product(name: "StorageKit", package: "storage-kit"),
-                .product(name: "StorageKitSystemClock", package: "storage-kit"),
-                .product(name: "SQLiteStorage", package: "storage-kit"),
             ],
             swiftSettings: [
                 .define(
