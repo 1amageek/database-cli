@@ -18,7 +18,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-kit.git",
-            from: "26.0817.0",
+            from: "26.0818.0",
             traits: [
                 .trait(
                     name: "MultipleBases",
@@ -28,7 +28,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-client.git",
-            from: "26.0814.0",
+            from: "26.0818.0",
             traits: [
                 .trait(
                     name: "MultipleBases",
@@ -46,7 +46,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-framework.git",
-            from: "26.0817.0",
+            from: "26.0818.0",
             traits: [
                 .trait(name: "AllRuntimeFeatures"),
                 .trait(

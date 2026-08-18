@@ -70,7 +70,7 @@ database root. `DatabaseOperationTarget`, Base, Composition, persisted Grant,
 and the three options above are absent from that command graph.
 
 The non-default `MultipleBases` trait switches the full dependency graph to
-DatabaseWire v3. Only then does every remote invocation carry one explicit
+DatabaseWire v4. Only then does every remote invocation carry one explicit
 `DatabaseOperationTarget`. Data operations require `--base`; read-only queries
 require either `--base` or `--composition`; catalog and control commands select
 the database/control target from their command semantics. There is no implicit

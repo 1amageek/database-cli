@@ -5,7 +5,7 @@ It provides one-shot commands, an explicit interactive shell, lossless typed
 input and output, bounded pagination, and a separately linked FoundationDB
 diagnostic companion.
 
-Current development version: `26.0817.0`
+Current development version: `26.0818.0`
 
 ```mermaid
 flowchart LR
@@ -250,7 +250,7 @@ DatabaseWire v2 requests. It contains no Base/Composition/Grant commands and
 does not synthesize a `.database` target.
 
 Building the full dependency graph with the non-default `MultipleBases` trait
-adds DatabaseWire v3 and explicit `DatabaseOperationTarget` selection. In that
+adds DatabaseWire v4 and explicit `DatabaseOperationTarget` selection. In that
 configuration there is no implicit Base: data operations require `--base`, and
 read operations require either `--base` or `--composition`. Control and catalog
 commands select the database target from their command semantics.

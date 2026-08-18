@@ -42,7 +42,7 @@ struct WireRequestBuilder: Sendable {
         case ["composition", "describe"], ["composition", "replace"],
              ["composition", "delete"]:
             return .composition(
-                try compositionID(command.positionals[0])
+                .named(try compositionID(command.positionals[0]))
             )
         case let path where path.first == "grant" || path.first == "job":
             return try administrativeTarget(command.options)
@@ -780,7 +780,7 @@ private extension WireRequestBuilder {
         }
         if let base { return .base(try baseID(base)) }
         if let composition {
-            return .composition(try compositionID(composition))
+            return .composition(.named(try compositionID(composition)))
         }
         throw DatabaseCLIError(
             .input,

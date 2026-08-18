@@ -126,9 +126,11 @@ func rendersCompositionProvenance() throws {
     let handle = try FileHandle(forWritingTo: temporary)
     let baseID = try Base.ID("company-a")
     let provenance = try CompositionPageProvenance(
-        compositionID: Base.Composition.ID("shared"),
-        generation: 7,
-        baseIDs: [baseID],
+        composition: try .named(
+            id: Base.Composition.ID("shared"),
+            generation: 7,
+            bases: [baseID]
+        ),
         origins: [.source(baseID)]
     )
     let page = try QueryRowPage(
@@ -157,7 +159,9 @@ func rendersCompositionProvenance() throws {
 
     #expect(rendered.elementCount == 1)
     #expect(output.contains("\"$provenance\""))
-    #expect(output.contains("\"composition\":\"shared\""))
+    #expect(output.contains("\"kind\":\"named\""))
+    #expect(output.contains("\"id\":\"shared\""))
+    #expect(output.contains("\"generation\":\"7\""))
     #expect(output.contains("\"base\":\"company-a\""))
     #expect(output.contains("\"$consistency\""))
     #expect(output.contains("\"type\":\"federated\""))

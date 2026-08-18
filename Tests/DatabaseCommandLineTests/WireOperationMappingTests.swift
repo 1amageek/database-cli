@@ -438,7 +438,7 @@ private func databaseTarget(
     case .base(let id):
         return .base(try Base.ID(id))
     case .composition(let id):
-        return .composition(try Base.Composition.ID(id))
+        return .composition(.named(try Base.Composition.ID(id)))
     }
 }
 

@@ -916,17 +916,44 @@ private extension ResultRenderer {
     ) -> StrictJSONValue {
         switch target {
         case .database:
-            .object([("kind", .string("database"))])
+            return .object([("kind", .string("database"))])
         case .base(let id):
-            .object([
+            return .object([
                 ("kind", .string("base")),
                 ("id", .string(id.value)),
             ])
-        case .composition(let id):
-            .object([
-                ("kind", .string("composition")),
-                ("id", .string(id.value)),
-            ])
+        case .composition(let selection):
+            switch selection.kind {
+            case .named:
+                guard let id = selection.namedID,
+                      selection.bases == nil else {
+                    preconditionFailure(
+                        "Named Composition selection invariant is invalid"
+                    )
+                }
+                return .object([
+                    ("kind", .string("composition")),
+                    ("id", .string(id.value)),
+                ])
+            case .derived:
+                guard selection.namedID == nil,
+                      let bases = selection.bases else {
+                    preconditionFailure(
+                        "Derived Composition selection invariant is invalid"
+                    )
+                }
+                return .object([
+                    ("kind", .string("derived-composition")),
+                    (
+                        "bases",
+                        .array(
+                            bases.map {
+                                .string($0.value)
+                            }
+                        )
+                    ),
+                ])
+            }
         }
     }
 

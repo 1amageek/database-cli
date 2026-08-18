@@ -420,10 +420,43 @@ public struct ResultRenderer: Sendable {
         origin: CompositionOrigin
     ) -> StrictJSONValue {
         .object([
-            ("composition", .string(provenance.compositionID.value)),
-            ("generation", .string(String(provenance.generation))),
+            ("composition", compositionResolutionNode(provenance.composition)),
             ("origin", originNode(origin)),
         ])
+    }
+
+    private func compositionResolutionNode(
+        _ composition: CompositionResolution
+    ) -> StrictJSONValue {
+        let bases = StrictJSONValue.array(
+            composition.bases.map { .string($0.value) }
+        )
+        switch composition.kind {
+        case .named:
+            guard let id = composition.namedID,
+                  let generation = composition.generation else {
+                preconditionFailure(
+                    "Named Composition resolution invariant is invalid"
+                )
+            }
+            return .object([
+                ("kind", .string("named")),
+                ("id", .string(id.value)),
+                ("generation", .string(String(generation))),
+                ("bases", bases),
+            ])
+        case .derived:
+            guard composition.namedID == nil,
+                  composition.generation == nil else {
+                preconditionFailure(
+                    "Derived Composition resolution invariant is invalid"
+                )
+            }
+            return .object([
+                ("kind", .string("derived")),
+                ("bases", bases),
+            ])
+        }
     }
 
     private func originNode(_ origin: CompositionOrigin) -> StrictJSONValue {
