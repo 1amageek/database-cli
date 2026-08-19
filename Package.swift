@@ -9,7 +9,7 @@ let package = Package(
         .executable(name: "database-fdb", targets: ["DatabaseFDBExecutable"]),
     ],
     traits: [
-        .trait(name: "MultipleBases"),
+        .trait(name: "MultiBase"),
     ],
     dependencies: [
         .package(
@@ -18,21 +18,21 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-kit.git",
-            from: "26.0818.0",
+            from: "26.0819.0",
             traits: [
                 .trait(
-                    name: "MultipleBases",
-                    condition: .when(traits: ["MultipleBases"])
+                    name: "MultiBase",
+                    condition: .when(traits: ["MultiBase"])
                 ),
             ]
         ),
         .package(
             url: "https://github.com/1amageek/database-client.git",
-            from: "26.0818.0",
+            from: "26.0819.0",
             traits: [
                 .trait(
-                    name: "MultipleBases",
-                    condition: .when(traits: ["MultipleBases"])
+                    name: "MultiBase",
+                    condition: .when(traits: ["MultiBase"])
                 ),
             ]
         ),
@@ -46,12 +46,12 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-framework.git",
-            from: "26.0818.0",
+            exact: "26.0819.3",
             traits: [
                 .trait(name: "AllRuntimeFeatures"),
                 .trait(
-                    name: "MultipleBases",
-                    condition: .when(traits: ["MultipleBases"])
+                    name: "MultiBase",
+                    condition: .when(traits: ["MultiBase"])
                 ),
             ]
         ),
@@ -90,8 +90,8 @@ let package = Package(
             ],
             swiftSettings: [
                 .define(
-                    "DATABASE_CLI_MULTIPLE_BASES",
-                    .when(traits: ["MultipleBases"])
+                    "DATABASE_CLI_MULTI_BASE",
+                    .when(traits: ["MultiBase"])
                 ),
             ]
         ),
@@ -136,8 +136,8 @@ let package = Package(
             ],
             swiftSettings: [
                 .define(
-                    "DATABASE_CLI_MULTIPLE_BASES",
-                    .when(traits: ["MultipleBases"])
+                    "DATABASE_CLI_MULTI_BASE",
+                    .when(traits: ["MultiBase"])
                 ),
             ]
         ),
@@ -145,8 +145,17 @@ let package = Package(
             name: "DatabaseFDBCommandLineTests",
             dependencies: [
                 "DatabaseFDBCommandLine",
+                .product(name: "DatabaseTypes", package: "database-types"),
+                .product(name: "DatabaseKit", package: "database-kit"),
                 .product(name: "DatabaseEngine", package: "database-framework"),
                 .product(name: "StorageKit", package: "storage-kit"),
+                .product(name: "StorageKitSystemClock", package: "storage-kit"),
+            ],
+            swiftSettings: [
+                .define(
+                    "DATABASE_CLI_MULTI_BASE",
+                    .when(traits: ["MultiBase"])
+                ),
             ]
         ),
     ],

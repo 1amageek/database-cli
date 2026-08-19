@@ -75,7 +75,7 @@ extension ResultRenderer {
         _ = try renderJSON(node)
     }
 
-    #if DATABASE_CLI_MULTIPLE_BASES
+    #if DATABASE_CLI_MULTI_BASE
     func renderBaseExecution(
         _ response: BaseExecuteOperation.Response
     ) throws {
@@ -268,8 +268,8 @@ extension ResultRenderer {
         let graphEntities = filtered.filter { entity in
             entity.fields.contains { $0.reference != nil }
                 || entity.indexes.contains { index in
-                    let kind = index.kind.lowercased()
-                    return kind.contains("graph") || kind.contains("rdf")
+                    if case .graph = index.type { return true }
+                    return false
                 }
         }
         _ = try renderJSON(.object([
@@ -765,7 +765,7 @@ private extension ResultRenderer {
             ("indexes", .array(try entity.indexes.map { index in
                 .object([
                     ("name", .string(index.name)),
-                    ("kind", .string(index.kind)),
+                    ("type", .string(index.type.diagnosticName)),
                     ("fields", .array(index.fields.map {
                         .string(String($0))
                     })),
@@ -832,7 +832,7 @@ private extension ResultRenderer {
         return report.continuation
     }
 
-    #if DATABASE_CLI_MULTIPLE_BASES
+    #if DATABASE_CLI_MULTI_BASE
     func baseDescriptionNode(
         _ description: BaseExecuteOperation.Description
     ) -> StrictJSONValue {
@@ -989,7 +989,7 @@ private extension ResultRenderer {
         case .capabilitiesDescribe: "capabilitiesDescribe"
         case .schemaDescribe: "schemaDescribe"
         case .schemaExecute: "schemaExecute"
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         case .baseExecute: "baseExecute"
         case .compositionExecute: "compositionExecute"
         case .grantExecute: "grantExecute"
@@ -1017,7 +1017,7 @@ private extension ResultRenderer {
         fields.append(("id", .string(job.jobID.description)))
         fields.append(("family", .string(operationName(job.operation.family))))
         fields.append(("kind", .string(job.operation.kind)))
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         fields.append(("target", operationTargetNode(job.target)))
         #endif
         return .object(fields)

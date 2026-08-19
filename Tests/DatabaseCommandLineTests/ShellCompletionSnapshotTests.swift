@@ -14,7 +14,7 @@ struct ShellCompletionSnapshotTests {
         )
 
         #expect(snapshot.values(in: "").contains("schema"))
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         #expect(snapshot.values(in: "").contains("\\base"))
         #expect(snapshot.values(in: "").contains("\\composition"))
         #else
@@ -52,7 +52,7 @@ struct ShellCompletionSnapshotTests {
                     indexes: [
                         .init(
                             name: "Document_graph",
-                            kind: "graph",
+                            type: .graph(.property),
                             fields: []
                         ),
                     ]

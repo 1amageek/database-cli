@@ -3,7 +3,6 @@
 Use the pinned Swift snapshot:
 
 ```bash
-export TOOLCHAINS=org.swift.64202607231a
 scripts/xcode-test-harness
 ```
 
@@ -12,7 +11,8 @@ DerivedData directory to reuse compiled dependencies. The harness still runs
 `build-for-testing`, injects the pinned testing runtime, and executes
 `test-without-building`; it does not trust a compile-only result.
 
-The harness performs one `build-for-testing`, injects the snapshot's
+The harness selects `org.swift.64202608141a`, performs one
+`build-for-testing`, injects the snapshot's
 `libTesting.dylib` path into every generated test target, then runs
 `test-without-building`. It requires the reviewed test count, zero failures,
 zero skips, zero expected failures, zero runtime warnings, and no internal tool
@@ -20,9 +20,9 @@ errors. Dependency checkout bypasses Xcode's shared repository cache so a
 newly published package revision cannot be resolved from stale tag metadata
 without its commit tree. Local path dependencies are rejected unless
 `DATABASE_CLI_ALLOW_LOCAL_DEPENDENCIES=1` is explicitly set for diagnosis.
-The reviewed standard CLI contract is 45 logical tests. Set
-`DATABASE_CLI_TEST_TRAITS=MultipleBases` to select that trait in an isolated
-source copy and require 59 logical tests.
+The reviewed standard CLI contract is 47 logical tests. Set
+`DATABASE_CLI_TEST_TRAITS=MultiBase` to select that trait in an isolated
+source copy and require 60 logical tests.
 
 Executable contracts use:
 

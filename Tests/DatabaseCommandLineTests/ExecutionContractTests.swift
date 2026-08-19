@@ -18,7 +18,7 @@ func mapsExecutionContract() throws {
         "--timeout-milliseconds", "15",
         "--page-size", "16",
     ]
-    #if DATABASE_CLI_MULTIPLE_BASES
+    #if DATABASE_CLI_MULTI_BASE
     arguments += ["--base", "company-a"]
     #endif
     let command = try CommandParser().parse(arguments)
@@ -98,7 +98,7 @@ func rejectsIncompatibleOutput() throws {
             diagnosticHandle: FileHandle.nullDevice
         )
     )
-    #if DATABASE_CLI_MULTIPLE_BASES
+    #if DATABASE_CLI_MULTI_BASE
     let result = try QueryBooleanResult(
         value: true,
         provenance: nil,
@@ -117,7 +117,70 @@ func rejectsIncompatibleOutput() throws {
     }
 }
 
-#if DATABASE_CLI_MULTIPLE_BASES
+@Test("Graph inspection selects typed graph indexes and preserves their subtype")
+func graphInspectionUsesTypedIndexSemantics() throws {
+    let temporary = FileManager.default.temporaryDirectory
+        .appendingPathComponent(Foundation.UUID().uuidString)
+    #expect(FileManager.default.createFile(atPath: temporary.path, contents: nil))
+    defer {
+        do { try FileManager.default.removeItem(at: temporary) }
+        catch { Issue.record("Temporary output cleanup failed: \(error)") }
+    }
+    let handle = try FileHandle(forWritingTo: temporary)
+    defer {
+        do { try handle.close() }
+        catch { Issue.record("Temporary output close failed: \(error)") }
+    }
+    let response = SchemaDescribeOperation.Response(
+        version: SchemaVersion(1, 0, 0),
+        entities: [
+            .init(
+                name: "Document",
+                fields: [],
+                indexes: [
+                    .init(
+                        name: "Document_graph",
+                        type: .graph(.ontologyProjection),
+                        fields: []
+                    ),
+                ]
+            ),
+            .init(
+                name: "AuditLog",
+                fields: [],
+                indexes: [
+                    .init(
+                        name: "AuditLog_ordered",
+                        type: .ordered,
+                        fields: []
+                    ),
+                ]
+            ),
+        ]
+    )
+    let renderer = ResultRenderer(
+        output: OutputWriter(
+            resultHandle: handle,
+            diagnosticHandle: .nullDevice
+        )
+    )
+
+    try renderer.renderGraphInspection(response, entity: nil)
+    try handle.synchronize()
+    let root = try #require(
+        try JSONSerialization.jsonObject(with: Data(contentsOf: temporary))
+            as? [String: Any]
+    )
+    let entities = try #require(root["entities"] as? [[String: Any]])
+    let document = try #require(entities.first)
+    let indexes = try #require(document["indexes"] as? [[String: Any]])
+
+    #expect(entities.count == 1)
+    #expect(document["name"] as? String == "Document")
+    #expect(indexes.first?["type"] as? String == "graph.ontologyProjection")
+}
+
+#if DATABASE_CLI_MULTI_BASE
 @Test("Composition rows stream provenance and consistency without materializing the page")
 func rendersCompositionProvenance() throws {
     let temporary = FileManager.default.temporaryDirectory

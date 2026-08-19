@@ -115,7 +115,7 @@ private extension ShellCompletionSnapshot {
             "\\page-size", "\\next", "\\history", "\\mode", "\\g",
             "\\clear", "\\quit",
         ]
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         commands.append(contentsOf: ["\\base", "\\composition"])
         #endif
         for command in commands {

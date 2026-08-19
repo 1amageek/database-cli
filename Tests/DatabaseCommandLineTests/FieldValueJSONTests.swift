@@ -143,7 +143,7 @@ func scalarBindingsBuildCanonicalParameters() throws {
         "--parameter", "$1=int64:42",
         "--parameter", "name=string:alice",
     ]
-    #if DATABASE_CLI_MULTIPLE_BASES
+    #if DATABASE_CLI_MULTI_BASE
     arguments += ["--base", "company-a"]
     #endif
     let command = try CommandParser().parse(arguments)

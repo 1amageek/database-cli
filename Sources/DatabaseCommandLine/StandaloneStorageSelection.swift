@@ -46,7 +46,7 @@ struct StandaloneStorageSelection: Sendable, Equatable {
         if memory {
             return Self(
                 serverArguments: ["--storage", "sqlite", "--memory"]
-                    + (try multipleBasesNamespaceArguments(command, backend: .sqlite))
+                    + (try multiBaseNamespaceArguments(command, backend: .sqlite))
             )
         }
         guard let path else {
@@ -56,7 +56,7 @@ struct StandaloneStorageSelection: Sendable, Equatable {
             serverArguments: [
                 "--storage", "sqlite",
                 "--path", URL(fileURLWithPath: path).standardizedFileURL.path,
-            ] + (try multipleBasesNamespaceArguments(command, backend: .sqlite))
+            ] + (try multiBaseNamespaceArguments(command, backend: .sqlite))
         )
     }
 
@@ -134,7 +134,7 @@ struct StandaloneStorageSelection: Sendable, Equatable {
             "--postgres-schema-management", schemaManagement,
             "--postgres-tls", tls,
         ])
-        arguments.append(contentsOf: try multipleBasesNamespaceArguments(
+        arguments.append(contentsOf: try multiBaseNamespaceArguments(
             command,
             backend: .postgreSQL
         ))
@@ -166,7 +166,7 @@ struct StandaloneStorageSelection: Sendable, Equatable {
         for component in directory {
             arguments.append(contentsOf: ["--fdb-directory", component])
         }
-        arguments.append(contentsOf: try multipleBasesNamespaceArguments(
+        arguments.append(contentsOf: try multiBaseNamespaceArguments(
             command,
             backend: .foundationDB
         ))
@@ -197,11 +197,11 @@ struct StandaloneStorageSelection: Sendable, Equatable {
         }
     }
 
-    private static func multipleBasesNamespaceArguments(
+    private static func multiBaseNamespaceArguments(
         _ command: ParsedCommand,
         backend: Backend
     ) throws -> [String] {
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         let components = command.options.values("domain-namespace")
         if backend == .foundationDB {
             guard components.isEmpty else {
@@ -216,7 +216,7 @@ struct StandaloneStorageSelection: Sendable, Equatable {
               components.allSatisfy({ !$0.isEmpty }) else {
             throw DatabaseCLIError(
                 .input,
-                "MultipleBases requires at least one '--domain-namespace <component>'"
+                "MultiBase requires at least one '--domain-namespace <component>'"
             )
         }
         var arguments: [String] = []
@@ -241,7 +241,7 @@ struct StandaloneStorageSelection: Sendable, Equatable {
         "fdb-cluster-file", "fdb-directory",
     ]
     private static var localOptionNames: [String] {
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         ["storage", "memory"]
             + postgreSQLOptionNames
             + foundationDBOptionNames

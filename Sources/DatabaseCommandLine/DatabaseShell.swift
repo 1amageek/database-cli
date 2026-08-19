@@ -171,7 +171,7 @@ private extension DatabaseShell {
         var promptConnection: String
         var database: String
         var mode: ShellMode
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         var target: Target? = nil
         #endif
         var outputFormat: String?
@@ -186,7 +186,7 @@ private extension DatabaseShell {
 
         var prompt: String {
             let suffix = statementLines.isEmpty ? "> " : "...> "
-            #if DATABASE_CLI_MULTIPLE_BASES
+            #if DATABASE_CLI_MULTI_BASE
             let targetLabel = target?.promptLabel ?? "database"
             return "\(promptConnection)/\(database) [\(targetLabel)] [\(mode.promptLabel)]\(suffix)"
             #else
@@ -195,7 +195,7 @@ private extension DatabaseShell {
         }
     }
 
-    #if DATABASE_CLI_MULTIPLE_BASES
+    #if DATABASE_CLI_MULTI_BASE
     enum Target: Sendable, Equatable {
         case base(String)
         case composition(String)
@@ -326,7 +326,7 @@ private extension DatabaseShell {
                 "\\clear",
                 "\\quit",
             ]
-            #if DATABASE_CLI_MULTIPLE_BASES
+            #if DATABASE_CLI_MULTI_BASE
             commands.insert("\\base <id>", at: 3)
             commands.insert("\\composition <id>", at: 4)
             #endif
@@ -345,18 +345,18 @@ private extension DatabaseShell {
             state.profile = profile.name
             state.promptConnection = profile.name
             state.database = profile.databaseID
-            #if DATABASE_CLI_MULTIPLE_BASES
+            #if DATABASE_CLI_MULTI_BASE
             state.target = nil
             #endif
         case "\\database":
             guard tokens.count == 1 else {
                 throw DatabaseCLIError(.input, "Usage: \\database")
             }
-            #if DATABASE_CLI_MULTIPLE_BASES
+            #if DATABASE_CLI_MULTI_BASE
             state.target = nil
             #endif
             state.statementLines.removeAll(keepingCapacity: true)
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         case "\\base":
             guard tokens.count == 2 else {
                 throw DatabaseCLIError(.input, "Usage: \\base <id>")
@@ -482,7 +482,7 @@ private extension DatabaseShell {
             whenSupportedBy: descriptor,
             to: &arguments
         )
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         try appendSelectedTarget(
             state.target,
             whenSupportedBy: descriptor,
@@ -555,7 +555,7 @@ private extension DatabaseShell {
         )
     }
 
-    #if DATABASE_CLI_MULTIPLE_BASES
+    #if DATABASE_CLI_MULTI_BASE
     func appendSelectedTarget(
         _ target: Target?,
         whenSupportedBy command: CommandDescriptor,

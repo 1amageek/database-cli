@@ -80,7 +80,7 @@ public struct ResultRenderer: Sendable {
             guard format != .csv && format != .nquads else {
                 throw DatabaseCLIError(.input, "Boolean results do not support \(format.rawValue) output")
             }
-            #if DATABASE_CLI_MULTIPLE_BASES
+            #if DATABASE_CLI_MULTI_BASE
             let provenance = try result.provenance.map { provenance in
                 var iterator = provenance.makeOriginIterator()
                 guard let origin = try iterator.next(),
@@ -159,7 +159,7 @@ public struct ResultRenderer: Sendable {
             throw DatabaseCLIError(.input, "N-Quads output requires an RDF result")
         }
         var iterator = page.makeRowIterator()
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         var originIterator = page.provenance?.makeOriginIterator()
         #endif
         var count: UInt64 = 0
@@ -168,7 +168,7 @@ public struct ResultRenderer: Sendable {
             bytes += UInt64(try output.result("["))
         } else if format == .table {
             var columns = page.columns.map(\.name)
-            #if DATABASE_CLI_MULTIPLE_BASES
+            #if DATABASE_CLI_MULTI_BASE
             if page.provenance != nil { columns.append("$provenance") }
             #endif
             bytes += UInt64(
@@ -178,7 +178,7 @@ public struct ResultRenderer: Sendable {
             )
         } else if format == .csv {
             var columns = page.columns.map { csvEscape($0.name) }
-            #if DATABASE_CLI_MULTIPLE_BASES
+            #if DATABASE_CLI_MULTI_BASE
             if page.provenance != nil { columns.append("$provenance") }
             #endif
             bytes += UInt64(
@@ -189,7 +189,7 @@ public struct ResultRenderer: Sendable {
         }
         while let row = try iterator.next() {
             try elementQuota?.reserveOne()
-            #if DATABASE_CLI_MULTIPLE_BASES
+            #if DATABASE_CLI_MULTI_BASE
             let provenanceNode = try rowProvenanceNode(
                 page.provenance,
                 iterator: &originIterator
@@ -233,13 +233,13 @@ public struct ResultRenderer: Sendable {
             bytes += UInt64(try output.result(encoded))
             count += 1
         }
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         try requireOriginsExhausted(&originIterator)
         #endif
         if format == .json, jsonFraming.closesCollection {
             bytes += UInt64(try output.result("]\n"))
         }
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         try renderPageMetadata(
             continuation: page.continuation,
             consistency: page.consistency,
@@ -272,7 +272,7 @@ public struct ResultRenderer: Sendable {
                 "RDF results support only nquads, jsonl, or json output"
             )
         }
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         guard format != .nquads || page.provenance == nil else {
             throw DatabaseCLIError(
                 .input,
@@ -282,7 +282,7 @@ public struct ResultRenderer: Sendable {
         #endif
         let nquads = NQuadsEncoder()
         var iterator = page.makeQuadIterator()
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         var originIterator = page.provenance?.makeOriginIterator()
         #endif
         var count: UInt64 = 0
@@ -292,7 +292,7 @@ public struct ResultRenderer: Sendable {
         }
         while let quad = try iterator.next() {
             try elementQuota?.reserveOne()
-            #if DATABASE_CLI_MULTIPLE_BASES
+            #if DATABASE_CLI_MULTI_BASE
             let provenanceNode = try rowProvenanceNode(
                 page.provenance,
                 iterator: &originIterator
@@ -332,13 +332,13 @@ public struct ResultRenderer: Sendable {
             bytes += UInt64(try output.result(encoded))
             count += 1
         }
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         try requireOriginsExhausted(&originIterator)
         #endif
         if format == .json, jsonFraming.closesCollection {
             bytes += UInt64(try output.result("]\n"))
         }
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         try renderPageMetadata(
             continuation: page.continuation,
             consistency: page.consistency,
@@ -389,7 +389,7 @@ public struct ResultRenderer: Sendable {
         return StrictJSONWriter.encode(.object(fields))
     }
 
-    #if DATABASE_CLI_MULTIPLE_BASES
+    #if DATABASE_CLI_MULTI_BASE
     private func rowProvenanceNode(
         _ provenance: CompositionPageProvenance?,
         iterator: inout CompositionOriginIterator?
@@ -506,7 +506,7 @@ public struct ResultRenderer: Sendable {
         return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
     }
 
-    #if DATABASE_CLI_MULTIPLE_BASES
+    #if DATABASE_CLI_MULTI_BASE
     private func renderPageMetadata(
         continuation: ByteString?,
         consistency: DatabaseReadConsistency,

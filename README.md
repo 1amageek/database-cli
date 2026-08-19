@@ -5,17 +5,17 @@ It provides one-shot commands, an explicit interactive shell, lossless typed
 input and output, bounded pagination, and a separately linked FoundationDB
 diagnostic companion.
 
-Current development version: `26.0818.0`
+Current development version: `26.0819.0`
 
 ```mermaid
 flowchart LR
     CLI["database<br/>commands and shell"] --> Client["DatabaseClient"]
     Client --> Host["database-server<br/>HTTP / WebSocket / stdio"]
-    Host --> Wire["DatabaseWire v2<br/>14 operation identifiers"]
-    Wire -. "MultipleBases: v3 / 17 operations" .-> Optional["Base + Composition + persisted Grant"]
+    Host --> Wire["DatabaseWire v3<br/>14 operation identifiers"]
+    Wire -. "MultiBase: v5 / 17 operations" .-> Optional["Base + Composition + persisted Grant"]
     Wire --> Runtime["internal server dispatch"]
     Runtime --> Container["database-framework / DBContainer"]
-    Container -. "MultipleBases trait" .-> Bases["Base isolation<br/>Composition reads"]
+    Container -. "MultiBase trait" .-> Bases["Base isolation<br/>Composition reads"]
 
     CLI --> Helper["database-fdb<br/>version-matched companion"]
     Helper --> FDB["Explicit FoundationDB cluster<br/>bounded read-only diagnostics"]
@@ -30,7 +30,7 @@ lifecycle and read-only inspection are isolated in the adjacent
 
 - macOS 26 or later;
 - the pinned Swift 6.4 development snapshot
-  `org.swift.64202607231a` for source builds;
+  `org.swift.64202608141a` for source builds;
 - the version-matched `database-server` executable for `open` and `serve`;
 - an HTTP, HTTPS, WebSocket, or secure WebSocket DatabaseWire endpoint for
   remote commands;
@@ -43,7 +43,7 @@ lifecycle and read-only inspection are isolated in the adjacent
 Build the remote client without linking FoundationDB:
 
 ```bash
-export TOOLCHAINS=org.swift.64202607231a
+export TOOLCHAINS=org.swift.64202608141a
 swift build \
   --product database \
   --disable-dependency-cache \
@@ -53,7 +53,7 @@ swift build \
 Build the FoundationDB companion separately:
 
 ```bash
-export TOOLCHAINS=org.swift.64202607231a
+export TOOLCHAINS=org.swift.64202608141a
 swift build \
   --product database-fdb \
   --disable-dependency-cache \
@@ -63,7 +63,7 @@ swift build \
 Build the native server from the adjacent `database-server` package:
 
 ```bash
-export TOOLCHAINS=org.swift.64202607231a
+export TOOLCHAINS=org.swift.64202608141a
 swift build --product database-server
 ```
 
@@ -165,7 +165,7 @@ database query sparql @query.rq --output jsonl
 database mutate sparql @update.ru --idempotency-key update-2026-08-08
 ```
 
-When the server advertises the non-default `MultipleBases` capability, create a
+When the server advertises the non-default `MultiBase` capability, create a
 Base and select it explicitly:
 
 ```bash
@@ -200,11 +200,11 @@ database
 ├── open
 ├── serve
 ├── schema list|show|plan|apply
-├── base                                      [MultipleBases only]
+├── base                                      [MultiBase only]
 │   ├── placements|list|describe|create|retire|activate|delete
 │   └── placement plan|apply
-├── composition list|describe|create|replace|delete  [MultipleBases only]
-├── grant direct|effective|add|revoke                [MultipleBases only]
+├── composition list|describe|create|replace|delete  [MultiBase only]
+├── grant direct|effective|add|revoke                [MultiBase only]
 ├── query sql|sparql
 ├── mutate sql|sparql
 ├── entity insert|update|upsert|delete|apply
@@ -243,14 +243,14 @@ expected current fingerprint and an
 idempotency key. A successful apply publishes one immutable runtime generation;
 in-flight requests retain their old generation lease.
 
-### Optional MultipleBases targets
+### Optional MultiBase targets
 
 The standard CLI/runtime graph has one database root and emits target-free
-DatabaseWire v2 requests. It contains no Base/Composition/Grant commands and
+DatabaseWire v3 requests. It contains no Base/Composition/Grant commands and
 does not synthesize a `.database` target.
 
-Building the full dependency graph with the non-default `MultipleBases` trait
-adds DatabaseWire v4 and explicit `DatabaseOperationTarget` selection. In that
+Building the full dependency graph with the non-default `MultiBase` trait
+adds DatabaseWire v5 and explicit `DatabaseOperationTarget` selection. In that
 configuration there is no implicit Base: data operations require `--base`, and
 read operations require either `--base` or `--composition`. Control and catalog
 commands select the database target from their command semantics.
@@ -258,11 +258,11 @@ commands select the database target from their command semantics.
 | Command kind | Target selection |
 |---|---|
 | Standard graph | No operation target exists; every command addresses the single database root |
-| MultipleBases database control | Database target is selected by the command |
-| MultipleBases query | Required `--base <id>` or read-only `--composition <id>` |
-| MultipleBases data operations | Required `--base <id>` |
-| MultipleBases control/admin operations | Command-specific database or explicit Base target |
-| Base/Composition/Grant catalog | Compiled only with `MultipleBases` and capability-checked at runtime |
+| MultiBase database control | Database target is selected by the command |
+| MultiBase query | Required `--base <id>` or read-only `--composition <id>` |
+| MultiBase data operations | Required `--base <id>` |
+| MultiBase control/admin operations | Command-specific database or explicit Base target |
+| Base/Composition/Grant catalog | Compiled only with `MultiBase` and capability-checked at runtime |
 
 Graph algorithms also use `--target` for a destination vertex. That option is
 part of the graph algorithm request and is unrelated to the DatabaseWire
@@ -423,9 +423,9 @@ use `\g` explicitly.
 ```text
 \help
 \profile <name>
-\database                     [MultipleBases only]
-\base <id>                    [MultipleBases only]
-\composition <id>             [MultipleBases only]
+\database                     [MultiBase only]
+\base <id>                    [MultiBase only]
+\composition <id>             [MultiBase only]
 \output table|jsonl|json|csv|nquads
 \timing on|off
 \budget
@@ -443,7 +443,7 @@ continuation. The shell does not keep a server-side transaction alive and does
 not provide `begin`, `commit`, or `rollback` commands.
 
 Standard statement modes execute against the single database root and the
-prompt has no target selector. With `MultipleBases`, `\base <id>` selects one
+prompt has no target selector. With `MultiBase`, `\base <id>` selects one
 Base for reads and mutations, `\composition <id>` selects a read-only
 Composition, and `\database` returns to the database/control target. The
 trait-enabled prompt displays that selection; switching profiles returns to
@@ -530,15 +530,14 @@ or help definitions.
 Use the pinned toolchain and strict Xcode harness:
 
 ```bash
-export TOOLCHAINS=org.swift.64202607231a
 scripts/xcode-test-harness
 ```
 
-The harness resolves URL dependencies without using Xcode's shared repository
+The harness selects `org.swift.64202608141a`, resolves URL dependencies without using Xcode's shared repository
 cache, builds once, injects the matching Swift Testing runtime, and runs the
 generated `.xctestrun` without rebuilding. The reviewed standard contract is
-45 logical tests. Set `DATABASE_CLI_TEST_TRAITS=MultipleBases` to select that
-trait in an isolated source copy and require 59 tests. Both graphs require zero
+47 logical tests. Set `DATABASE_CLI_TEST_TRAITS=MultiBase` to select that
+trait in an isolated source copy and require 60 tests. Both graphs require zero
 failures, zero skips, zero expected failures, zero runtime warnings, and no
 internal tool errors.
 

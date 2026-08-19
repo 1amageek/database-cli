@@ -41,9 +41,9 @@ struct FDBCatalogInspector: Sendable {
         let indexes: [[String: Any]] = entity.indexes.map { index in
             [
                 "name": index.name,
-                "kind": index.kindIdentifier,
+                "type": index.type.diagnosticName,
                 "fields": index.fieldNames,
-                "unique": index.unique,
+                "unique": index.isUnique,
             ]
         }
         try output.json([

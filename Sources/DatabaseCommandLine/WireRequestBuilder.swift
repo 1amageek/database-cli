@@ -13,7 +13,7 @@ struct WireRequestBuilder: Sendable {
         try ExecutionOptions(options: command.options)
     }
 
-    #if DATABASE_CLI_MULTIPLE_BASES
+    #if DATABASE_CLI_MULTI_BASE
     func operationTarget(
         _ command: ParsedCommand
     ) throws -> DatabaseOperationTarget {
@@ -766,7 +766,7 @@ struct WireRequestBuilder: Sendable {
 }
 
 private extension WireRequestBuilder {
-    #if DATABASE_CLI_MULTIPLE_BASES
+    #if DATABASE_CLI_MULTI_BASE
     func readableTarget(
         _ options: CommandOptions
     ) throws -> DatabaseOperationTarget {
@@ -784,7 +784,7 @@ private extension WireRequestBuilder {
         }
         throw DatabaseCLIError(
             .input,
-            "Read operation requires '--base <id>' or '--composition <id>' when MultipleBases is enabled"
+            "Read operation requires '--base <id>' or '--composition <id>' when MultiBase is enabled"
         )
     }
 
@@ -808,7 +808,7 @@ private extension WireRequestBuilder {
         guard let raw = options.value("base") else {
             throw DatabaseCLIError(
                 .input,
-                "Data operation requires '--base <id>' when MultipleBases is enabled"
+                "Data operation requires '--base <id>' when MultiBase is enabled"
             )
         }
         return .base(try baseID(raw))

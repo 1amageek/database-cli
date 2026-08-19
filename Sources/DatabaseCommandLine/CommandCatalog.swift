@@ -203,7 +203,7 @@ private extension CommandCatalog {
             if budget { result += executionBudgetOptions }
             if parameters { result += parameterOptions }
             if graphPartitions { result += graphPartitionOptions }
-            #if DATABASE_CLI_MULTIPLE_BASES
+            #if DATABASE_CLI_MULTI_BASE
             if baseTarget {
                 result.append(
                     .value(
@@ -392,7 +392,7 @@ private extension CommandCatalog {
                 repeatable: true
             ),
         ]
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         standaloneStorageOptions.append(
             .value(
                 "domain-namespace",
@@ -465,7 +465,7 @@ private extension CommandCatalog {
             requiredIdempotencyKey: true
         ), capability: "schema.execute")
 
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         let expectedRevision = CommandOptionDescriptor.value(
             "expected-revision",
             "uint64",
@@ -551,7 +551,7 @@ private extension CommandCatalog {
         }
         #endif
 
-        #if DATABASE_CLI_MULTIPLE_BASES
+        #if DATABASE_CLI_MULTI_BASE
         let readableTargetRequirement: [Set<String>] = [
             ["base", "composition"],
         ]

@@ -1,8 +1,17 @@
 import DatabaseEngine
+import DatabaseKit
+import DatabaseTypes
 import Foundation
 import StorageKit
+import StorageKitSystemClock
 import Testing
 @testable import DatabaseFDBCommandLine
+
+#if !DATABASE_CLI_MULTI_BASE
+private struct FixedDatabaseWallClock: WallClock {
+    let now = Timestamp(secondsSinceUnixEpoch: 0)
+}
+#endif
 
 private struct FDBCommandFixture: Sendable {
     let arguments: [String]
@@ -198,3 +207,90 @@ func rawKeySelectorsAreExclusive() async {
         )
     }
 }
+
+#if !DATABASE_CLI_MULTI_BASE
+@Test("Catalog inspection preserves typed index semantics")
+func catalogInspectionUsesTypedIndexSemantics() async throws {
+    let engine = InMemoryEngine()
+    let root = Subspace()
+    let clock = SystemStorageClock()
+    let emptySchema = try Schema(entities: [])
+    let runtime = try DatabaseRuntimeConfiguration(
+        executionIdentity: DatabaseExecutionRuntimeIdentity(
+            identifier: "database-cli-tests",
+            revision: 1
+        )
+    )
+    let container = try await DBContainer.open(
+        for: emptySchema,
+        configuration: DBConfiguration(
+            storageEngine: engine,
+            databaseRoot: root,
+            monotonicClock: clock,
+            wallClock: FixedDatabaseWallClock()
+        ),
+        runtimeConfiguration: runtime
+    )
+    let index = try IndexDescriptor(
+        entityName: "Document",
+        declaration: IndexDeclaration<FieldIdentity>(
+            name: "Document_graph",
+            definition: .graph(
+                .ontologyProjection(
+                    individualIRIBase: "https://example.com/document/",
+                    graph: nil
+                ),
+                includedFields: []
+            )
+        ),
+        fieldSchemas: []
+    )
+    let entity = try Schema.Entity(
+        name: "Document",
+        identifierType: .string,
+        fields: [],
+        indexes: [index]
+    )
+    do {
+        try await SchemaRegistry(
+            database: container.engine,
+            root: root,
+            clock: clock
+        ).persist(try Schema(entities: [entity]))
+
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(Foundation.UUID().uuidString)
+        #expect(FileManager.default.createFile(atPath: outputURL.path, contents: nil))
+        defer {
+            do { try FileManager.default.removeItem(at: outputURL) }
+            catch { Issue.record("Temporary output cleanup failed: \(error)") }
+        }
+        let handle = try FileHandle(forWritingTo: outputURL)
+        defer {
+            do { try handle.close() }
+            catch { Issue.record("Temporary output close failed: \(error)") }
+        }
+        try await FDBCatalogInspector(
+            output: FDBOutput(
+                resultHandle: handle,
+                diagnosticHandle: .nullDevice
+            )
+        ).show(name: "Document", engine: container.engine, root: root)
+        try handle.synchronize()
+
+        let rootObject = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: outputURL))
+                as? [String: Any]
+        )
+        let indexes = try #require(rootObject["indexes"] as? [[String: Any]])
+        let renderedIndex = try #require(indexes.first)
+        #expect(renderedIndex["name"] as? String == "Document_graph")
+        #expect(renderedIndex["type"] as? String == "graph.ontologyProjection")
+        #expect(renderedIndex["unique"] as? Bool == false)
+        await container.shutdown()
+    } catch {
+        await container.shutdown()
+        throw error
+    }
+}
+#endif
