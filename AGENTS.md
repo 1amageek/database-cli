@@ -42,6 +42,7 @@
 - FoundationDB integration uses `scripts/fdb-test-harness`, an isolated cluster
   file, protocol readiness, authoritative shutdown, and negative readiness
   after teardown.
-- Before release, `Package.swift` must contain URL dependencies only. All three
-  executable products must be built, and the main `database` binary must not
-  link FoundationDB.
+- Before release, `Package.swift` must contain URL dependencies only. Build
+  both package executable products and the adjacent, version-matched
+  `database-server` executable; the main `database` binary must not link
+  FoundationDB.

@@ -13,6 +13,13 @@ diagnostic text. The resolver order is:
 Non-interactive execution without any credential fails with authentication exit
 code `3`. It never reads an echoed token from redirected standard input.
 
+The CLI resolves and transports credentials but does not authenticate a
+principal or authorize an operation. `database-server` establishes the
+authenticated request context; `database-framework` enforces entity, field,
+Base, Composition, and persisted Grant policy inside the execution path. The
+CLI never implements an administrator bypass or treats a local process as
+implicitly trusted.
+
 ## Routing boundary
 
 Database, tenant, and workspace are sent by both HTTP and WebSocket transports
@@ -37,6 +44,13 @@ files require `0600`. Symbolic-link files and foreign ownership are rejected.
 Non-loopback binding requires TLS, authentication, and complete routing before
 the socket is created. There is no unauthenticated flag or default-database
 fallback.
+
+The bootstrap and foreground process adapters in this package only locate,
+version-check, start, acknowledge, interrupt, and reap the adjacent
+`database-server` executable. They do not authenticate credentials, construct
+a listener, register operations, create a `DBContainer`, or open a storage
+backend. The bootstrap adapter treats the returned token as an opaque value and
+stores it only through the credential store before acknowledgement.
 
 ## Storage credentials and identity
 

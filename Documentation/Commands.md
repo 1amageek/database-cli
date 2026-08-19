@@ -1,10 +1,11 @@
 # Command reference
 
 This document defines the user-visible meaning of every `database` command.
-The generated `database help <command>` output is the authority for exact
-option spelling, required values, defaults, conflicts, and cardinality. This
-reference explains what an invocation does, what it returns, and whether it
-changes persistent state.
+`CommandCatalog` is the executable source of truth, and generated
+`database help <command>` output is authoritative for exact option spelling,
+required values, defaults, conflicts, and cardinality. This reference explains
+what an invocation does, what it returns, which package executes it, and
+whether it changes persistent state.
 
 ## Execution model
 
@@ -17,6 +18,7 @@ remote database commands
 
 standalone commands
     -> adjacent version-matched database-server process
+        -> database-framework execution
 
 FoundationDB diagnostics
     -> adjacent version-matched database-fdb process
@@ -25,6 +27,11 @@ FoundationDB diagnostics
 The CLI does not infer read versus write intent, retry a failed request, select
 another endpoint, or fall back to another storage backend. A command either
 executes its documented path or returns a typed failure.
+
+`database open` and `database serve` control an adjacent process; they do not
+embed server execution in the CLI. Base and Composition contracts belong to
+`database-kit`, their execution belongs to `database-framework`, and
+`database-server` only hosts and dispatches them.
 
 ## Input notation
 
@@ -271,9 +278,9 @@ do not accept query parameters or paging controls.
 ## Graph algorithms
 
 Every graph command maps to `graphAlgorithm` and requires a declared `--index`.
-It uses the standard single root or a required `--base` with `MultiBase`, and accepts source selection
-(`--partitions`, `--graph`, `--edge-label`), an execution budget, result paging,
-streaming output, and an advertised job kind.
+It uses the standard single root or a required `--base` with `MultiBase`, and
+accepts source selection (`--partitions`, `--graph`, `--edge-label`), an
+execution budget, result paging, streaming output, and an advertised job kind.
 
 | Command | Required / algorithm-specific input | Result |
 |---|---|---|
@@ -301,9 +308,8 @@ capability, index, and resource failures remain typed failures.
 | `database ontology validate-schema <ontology>` | Checks ontology/schema alignment. | Validation report; read-only and paged. |
 
 Ontology commands use the standard single root or a required `--base` with
-`MultiBase`, enforce
-the execution budget, and support advertised job kinds. Only commands whose
-responses can continue expose paging controls.
+`MultiBase`, enforce the execution budget, and support advertised job kinds.
+Only commands whose responses can continue expose paging controls.
 
 ## SHACL operations
 
@@ -315,28 +321,27 @@ responses can continue expose paging controls.
 | `database shacl validate <shapes-graph>` | Requires source entity/index; optionally selects partitions, data graph, focus, and entailment. | Conformance/violation report; read-only and paged. Non-conformance is data, while execution failure is a typed error. |
 
 SHACL commands use the standard single root or a required `--base` with
-`MultiBase`, enforce
-budgets, and support advertised job kinds. Named data graphs are tagged RDF
-terms. Explicit focus is a tagged array containing only RDF terms or only
-entity references.
+`MultiBase`, enforce budgets, and support advertised job kinds. Named data
+graphs are tagged RDF terms. Explicit focus is a tagged array containing only
+RDF terms or only entity references.
 
 ## Application commands
 
 `database command run <identifier> <input>` maps to `commandExecute`. It uses
-the standard single root or a required `--base` with `MultiBase`, and accepts input that
-must be a tagged object. `--access read-only|read-write` declares the canonical
-command access contract and defaults to read-only; it is not inferred from the
-identifier or payload. The registered server command remains authoritative and
-may reject an incorrect declaration. Output contains the tagged command value,
-access mode, and commit version for writes. The command supports budget,
-stream output, and advertised jobs, but not query paging controls.
+the standard single root or a required `--base` with `MultiBase`, and accepts
+input that must be a tagged object. `--access read-only|read-write` declares
+the canonical command access contract and defaults to read-only; it is not
+inferred from the identifier or payload. The registered server command remains
+authoritative and may reject an incorrect declaration. Output contains the
+tagged command value, access mode, and commit version for writes. The command
+supports budget, stream output, and advertised jobs, but not query paging
+controls.
 
 ## Migration, index, and maintenance
 
 These commands use the standard single root or a required `--base` with
-`MultiBase` and map to
-`maintenanceExecute`. They can hold locks, consume significant work budget,
-and change persistent state as described below.
+`MultiBase` and map to `maintenanceExecute`. They can hold locks, consume
+significant work budget, and change persistent state as described below.
 
 | Command | Behavior | Result / effects |
 |---|---|---|
@@ -366,10 +371,9 @@ The family spelling is the DatabaseWire identifier such as `queryExecute` or
 
 Standard job commands are target-free. With `MultiBase`, every job command
 selects the database/control target or one `--base`, and the selected target
-must match the persisted job identity. `job wait` alone
-accepts polling interval and client wait timeout. Job commands
-do not accept `--as-job`, query parameters, execution budgets, or source-result
-paging controls.
+must match the persisted job identity. `job wait` alone accepts polling
+interval and client wait timeout. Job commands do not accept `--as-job`, query
+parameters, execution budgets, or source-result paging controls.
 
 ## Inspection
 

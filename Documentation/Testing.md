@@ -20,9 +20,15 @@ errors. Dependency checkout bypasses Xcode's shared repository cache so a
 newly published package revision cannot be resolved from stale tag metadata
 without its commit tree. Local path dependencies are rejected unless
 `DATABASE_CLI_ALLOW_LOCAL_DEPENDENCIES=1` is explicitly set for diagnosis.
-The reviewed standard CLI contract is 47 logical tests. Set
-`DATABASE_CLI_TEST_TRAITS=MultiBase` to select that trait in an isolated
-source copy and require 60 logical tests.
+The reviewed contracts are:
+
+| Graph | Trait selection | Required logical tests |
+|---|---|---:|
+| Standard single root | none | 47 |
+| Explicit MultiBase | `DATABASE_CLI_TEST_TRAITS=MultiBase` | 60 |
+
+Both graphs require zero failures, zero skips, zero expected failures, zero
+runtime warnings, and no internal tool errors.
 
 Executable contracts use:
 
@@ -37,9 +43,17 @@ DATABASE_SERVER_EXECUTABLE=/path/to/database-server \
 scripts/process-test-harness
 ```
 
-Use binaries from that exact URL-resolved build. The disabled dependency cache
-prevents stale tag metadata in a shared SwiftPM repository cache from selecting
-a revision whose commit tree has not been fetched.
+Use `database` and `database-fdb` from that exact URL-resolved package build.
+Build `database-server` from its own URL-resolved package graph at the exact
+matching executable version. The disabled dependency cache prevents stale tag
+metadata in a shared SwiftPM repository cache from selecting a revision whose
+commit tree has not been fetched.
+
+| Binary | Owning package | Harness responsibility |
+|---|---|---|
+| `database` | `database-cli` | Parsing, invocation, shell, profile, credential, and output behavior |
+| `database-fdb` | `database-cli` | Explicit FoundationDB lifecycle and bounded diagnostics |
+| `database-server` | `database-server` | Native host, DatabaseWire dispatch, backend composition, and authoritative shutdown |
 
 The process harness sets `DATABASE_CLI_CONFIG_HOME` to a disposable mode-`0700`
 directory so profiles, server configuration, and history never touch the
@@ -82,9 +96,13 @@ Before tagging:
 
 1. verify `Package.swift` contains URL dependencies only;
 2. run the strict Xcode, process, and FoundationDB harnesses;
-3. verify the CLI and native server versions match;
-4. verify `database` does not link `libfdb_c`, while the native server and
+3. verify the committed command catalog, generated completions, README, and
+   command reference use the same public names and trait spelling;
+4. verify the CLI, FoundationDB companion, and native server versions match;
+5. verify `database` does not link `libfdb_c`, while the native server and
    `database-fdb` companion do;
-5. inspect the `.xcresult` summary and preserved logs;
-6. push the commit, create the release tag, and verify the tag commit equals
+6. inspect the `.xcresult` summary and preserved logs;
+7. confirm the worktree contains no generated build artifacts or obsolete
+   compatibility path;
+8. push the commit, create the release tag, and verify the tag commit equals
    `origin/main`.
