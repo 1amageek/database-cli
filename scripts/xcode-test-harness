@@ -168,8 +168,8 @@ if [[ -n "$TEST_TRAITS" ]]; then
     --exclude '*.xcresult' \
     "$ROOT_DIR/" "$source_root/"
   perl -0pi -e '
-    my $insertions = s/(\n    traits: \[\n)/$1        .default(enabledTraits: ["MultiBase"]),\n/s;
-    die "package trait list was not found\n" unless $insertions == 1;
+    my $insertions = s/(        \.trait\(name: "MultiBase"\),\n)/$1        .default(enabledTraits: ["MultiBase"]),\n/s;
+    die "MultiBase trait declaration was not found\n" unless $insertions == 1;
   ' "$source_root/Package.swift"
   build_root="$source_root"
 fi
