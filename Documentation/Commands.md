@@ -417,16 +417,19 @@ explicit cluster cannot be opened.
 | `database fdb cluster start` | Starts the selected local cluster and waits for a real protocol readiness probe. |
 | `database fdb cluster stop` | Stops the selected process and proves negative readiness. |
 | `database fdb cluster status` | Reports process and protocol readiness without changing the cluster. |
-| `database fdb catalog list --control-namespace <component> ...` | Opens the explicit cluster, resolves the exact existing control-domain namespace, and lists database catalog entities read-only. |
-| `database fdb catalog show <entity> --control-namespace <component> ...` | Reads one catalog entity from the exact control-domain namespace or returns not-found. |
+| `database fdb catalog list --control-namespace <component> ...` | Opens the explicit cluster, resolves the exact existing control-domain database root Directory, and lists database catalog entities read-only. |
+| `database fdb catalog show <entity> --control-namespace <component> ...` | Reads one catalog entity from the exact control-domain database root Directory or returns not-found. |
 | `database fdb raw get` | Reads exactly one key selected by hex, UTF-8, or tuple encoding under a total-byte bound. |
 | `database fdb raw range` | Reads one bounded prefix range; requires row limit and total-byte limit. |
 
 Raw key selectors are mutually exclusive. Raw write, delete, clear, implicit
 tuple conversion, and fallback cluster selection are intentionally absent.
 Catalog commands require one repeatable `--control-namespace` value per ordered
-namespace path component. They neither assume a default control domain nor
-fall back to the global namespace.
+database root Directory path component. `database-framework` owns the layout
+beneath that root, so the catalog is read from the Default Partition at
+`<root>/default/system/database-framework`. A root that `database-framework`
+has never initialized returns not-found. Catalog commands neither assume a
+default control domain nor fall back to the store root.
 
 ## Output formats
 

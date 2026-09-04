@@ -14,11 +14,11 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/1amageek/database-types.git",
-            from: "26.0730.0"
+            from: "26.0831.0"
         ),
         .package(
             url: "https://github.com/1amageek/database-kit.git",
-            from: "26.0819.0",
+            from: "26.0831.1",
             traits: [
                 .trait(
                     name: "MultiBase",
@@ -28,7 +28,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-client.git",
-            from: "26.0819.0",
+            from: "26.0904.0",
             traits: [
                 .trait(
                     name: "MultiBase",
@@ -38,15 +38,15 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/storage-kit.git",
-            from: "26.0807.0"
+            from: "26.0831.1"
         ),
         .package(
             url: "https://github.com/1amageek/fdb-swift-bindings.git",
-            from: "0.3.3"
+            from: "0.4.1"
         ),
         .package(
             url: "https://github.com/1amageek/database-framework.git",
-            exact: "26.0819.3",
+            from: "26.0904.0",
             traits: [
                 .trait(name: "AllRuntimeFeatures"),
                 .trait(

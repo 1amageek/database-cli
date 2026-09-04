@@ -80,7 +80,7 @@ private let idValue = #"{"$type":"string","value":"p1"}"#
 private let stringValue = #"{"$type":"string","value":"node"}"#
 private let objectValue = #"{"$type":"object","value":{}}"#
 private let uuid = "00000000-0000-0000-0000-000000000001"
-private let schemaJSON = #"{"formatVersion":2,"schemaVersion":{"major":1,"minor":0,"patch":0},"entities":[]}"#
+private let schemaJSON = #"{"formatVersion":3,"schemaVersion":{"major":1,"minor":0,"patch":0},"entities":[]}"#
 private let emptyFingerprint = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 @Test("Every single-database command parses", arguments: singleDatabaseCommandFixtures)

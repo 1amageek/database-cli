@@ -39,7 +39,7 @@ programs, and the split between them is a link-time boundary.
 | Product | Target chain | Owns |
 |---|---|---|
 | `database` | `DatabaseCLIExecutable` -> `DatabaseCommandLine` | command parsing, profiles, credentials, typed JSON, rendering, shell state, and adjacent-process control |
-| `database-fdb` | `DatabaseFDBExecutable` -> `DatabaseFDBCommandLine` -> `DatabaseCommandLine` | local FoundationDB cluster lifecycle, control-domain catalog inspection, and bounded read-only raw inspection |
+| `database-fdb` | `DatabaseFDBExecutable` -> `DatabaseFDBCommandLine` -> `DatabaseCommandLine` | local FoundationDB cluster lifecycle, control-domain database root Directory resolution, catalog inspection, and bounded read-only raw inspection |
 | `CDatabaseCLIReadline` | C target linked into `DatabaseCommandLine` | the line-editing host binding used by the interactive shell |
 | `CDatabaseCLISignals` | C target linked into `DatabaseCommandLine` | the signal-handling host binding used for interrupt and shutdown |
 
@@ -75,7 +75,7 @@ It does not own:
 | [database-kit](../database-kit/DESIGN.md) | depends on | operations, schema JSON, and DatabaseWire declarations | Supplies the canonical vocabulary every command is expressed in. | A command must not invent an operation or reinterpret a wire field. |
 | [database-types](../database-types/AGENTS.md) | depends on | primitive values and bounded byte ownership | Supplies the value identity that typed JSON must preserve losslessly. | Rendering must not change a value's identity through JSON inference. |
 | [database-server](../database-server/DESIGN.md) | adjacent process, version matched; no package dependency | the `database-server` executable interface, its bootstrap exchange, and its stdio serve mode | Executes everything the remote and standalone commands request. | It is not a dependency or product of this package. Version mismatch is a typed failure, never a downgrade or a fallback. |
-| [database-framework](../database-framework/DESIGN.md) | depends on, `database-fdb` only | `DatabaseEngine` catalog readers | Supplies the catalog reading used by FoundationDB diagnostics. | This dependency must never reach the `database` executable. |
+| [database-framework](../database-framework/DESIGN.md) | depends on, `database-fdb` only | `DatabaseEngine` catalog readers and the database root Directory layout | Supplies the catalog reading used by FoundationDB diagnostics. | This dependency must never reach the `database` executable. The Default Partition, `system`, and `database-framework` Directory names are `package`-visible in `DatabaseEngine`, so `FDBControlDomainLocator` duplicates them and the end-to-end catalog test fails if they drift. |
 | [storage-kit](../storage-kit/DESIGN.md) | depends on, `database-fdb` only | `FDBStorage` and the storage clock | Supplies the FoundationDB storage adapter used for diagnostics. | Diagnostics are read-only; the companion provides no raw mutation command. |
 | [fdb-swift-bindings](../fdb-swift-bindings/DESIGN.md) | depends on, `database-fdb` only | the FoundationDB client | Supplies cluster access for lifecycle and inspection. | An explicit cluster selection never falls back to the system default cluster. |
 

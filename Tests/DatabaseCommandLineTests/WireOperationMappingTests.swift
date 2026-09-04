@@ -81,7 +81,7 @@ private let operationFixtures: [OperationFixture] = [
 ]
 
 private let jobID = "00000000-0000-0000-0000-000000000001"
-private let schemaJSON = #"{"formatVersion":2,"schemaVersion":{"major":1,"minor":0,"patch":0},"entities":[]}"#
+private let schemaJSON = #"{"formatVersion":3,"schemaVersion":{"major":1,"minor":0,"patch":0},"entities":[]}"#
 private let emptyFingerprint = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 @Test("Schema plan and apply preserve the manifest and concurrency contract")

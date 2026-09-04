@@ -120,17 +120,17 @@ private extension DatabaseFDBApplication {
             ) { engine in
                 switch command.path {
                 case ["catalog", "list"]:
-                    let root = try await engine.resolveExistingNamespace(
-                        path: command.optionValues("control-namespace")
-                    )
+                    let root = try await FDBControlDomainLocator(
+                        rootComponents: command.optionValues("control-namespace")
+                    ).resolveCatalogRoot(engine: engine)
                     try await FDBCatalogInspector(output: output).list(
                         engine: engine,
                         root: root
                     )
                 case ["catalog", "show"]:
-                    let root = try await engine.resolveExistingNamespace(
-                        path: command.optionValues("control-namespace")
-                    )
+                    let root = try await FDBControlDomainLocator(
+                        rootComponents: command.optionValues("control-namespace")
+                    ).resolveCatalogRoot(engine: engine)
                     try await FDBCatalogInspector(output: output).show(
                         name: command.positionals[0],
                         engine: engine,

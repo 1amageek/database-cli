@@ -125,6 +125,14 @@ port="${FDB_TEST_PORT:-$(ruby -rsocket -e 'server = TCPServer.new("127.0.0.1", 0
   printf '%s' "$range_json" | jq -e \
     '.key.value == "Y2xpLXRlc3Qta2V5" and .value.value == "Y2xpLXRlc3QtdmFsdWU"'
 
+  catalog_status=0
+  catalog_output="$(timeout_command "$TIMEOUT_SECONDS" "$HELPER" catalog list \
+    --cluster-file "$CLUSTER_FILE" \
+    --control-namespace database-cli-fdb-harness 2>&1)" || catalog_status=$?
+  printf '%s\n' "$catalog_output"
+  [[ "$catalog_status" == "5" ]]
+  [[ -z "$(printf '%s' "$catalog_output" | sed -n '/^error: /!p')" ]]
+
   stop_json="$(timeout_command "$TIMEOUT_SECONDS" "$HELPER" cluster stop \
     --cluster-file "$CLUSTER_FILE")"
   printf '%s' "$stop_json" | jq -e '.ready == false and .stopped == true'

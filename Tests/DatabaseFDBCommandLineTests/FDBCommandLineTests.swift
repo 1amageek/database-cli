@@ -212,7 +212,6 @@ func rawKeySelectorsAreExclusive() async {
 @Test("Catalog inspection preserves typed index semantics")
 func catalogInspectionUsesTypedIndexSemantics() async throws {
     let engine = InMemoryEngine()
-    let root = Subspace()
     let clock = SystemStorageClock()
     let emptySchema = try Schema(entities: [])
     let runtime = try DatabaseRuntimeConfiguration(
@@ -225,12 +224,14 @@ func catalogInspectionUsesTypedIndexSemantics() async throws {
         for: emptySchema,
         configuration: DBConfiguration(
             storageEngine: engine,
-            databaseRoot: root,
+            databaseRootPath: [],
             monotonicClock: clock,
             wallClock: FixedDatabaseWallClock()
         ),
         runtimeConfiguration: runtime
     )
+    let root = try await FDBControlDomainLocator(rootComponents: [])
+        .resolveCatalogRoot(engine: container.engine)
     let index = try IndexDescriptor(
         entityName: "Document",
         declaration: IndexDeclaration<FieldIdentity>(
