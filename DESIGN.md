@@ -186,3 +186,25 @@ Change impact:
   harness, which is the only gate that observes the real adjacency.
 - Adding any storage or FoundationDB dependency to `DatabaseCommandLine` breaks
   the link-time boundary and is rejected regardless of test results.
+
+## Planned SQL Statement and Block Surface
+
+S17 adds statement and SQL-file/block invocation through DatabaseClient, using
+the [SQL semantic profile](../database-kit/Sources/DatabaseKit/Query/SQL/DESIGN.md).
+SQL text is sent intact; server/Framework owns grammar, binding, execution, and
+transaction state. The CLI must not acquire a Framework or storage dependency
+for parsing or execution. Existing explicit query/mutation commands retain
+their operation contracts.
+
+Output preserves statement order, affected-row counts, column ordinals/types,
+duplicate labels, empty-result schemas, typed NULL, and lossless rich values.
+Structured SQL output uses column declarations and positional row arrays,
+never an object keyed only by potentially duplicate labels. SQLSTATE and
+commit-unknown remain observable through stderr and the existing typed exit
+contract. A pending schema job is not reported as completed SQL DDL.
+
+The command and typed JSON authorities own the concrete syntax and rendering
+changes when S17 begins. Process verification covers real SQL-file execution,
+stdout/stderr, rollback readback, cancellation, and authoritative child stop;
+Wire-mapping tests alone do not prove execution. User profile/credential and
+main-executable link-separation contracts remain unchanged.
