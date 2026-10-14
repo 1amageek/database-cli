@@ -197,8 +197,8 @@ func rendersCompositionProvenance() throws {
         origins: [.source(baseID)]
     )
     let page = try QueryRowPage(
-        columns: [QueryColumn(number: 0, name: "name")],
-        rows: [QueryRow(values: [.string("Alice")])],
+        columns: [try QueryColumn(number: 1, name: "name", type: .sql(.text), isNullable: false)],
+        rows: [QueryRow(values: [.primitive(.string("Alice"))])],
         continuation: nil,
         provenance: provenance,
         consistency: .federated([

@@ -6,10 +6,13 @@ Use the pinned Swift snapshot:
 scripts/xcode-test-harness
 ```
 
-Set `XCODE_TEST_DERIVED_DATA_PATH` to an already attributed URL-resolved
-DerivedData directory to reuse compiled dependencies. The harness still runs
-`build-for-testing`, injects the pinned testing runtime, and executes
-`test-without-building`; it does not trust a compile-only result.
+Use `--preserve-work-root` and then `--reuse-work-root <reported-path>` to
+resynchronize sources and reuse dependencies attributed to the same manifest
+and input pins. The harness still runs `build-for-testing`, injects the pinned
+testing runtime, and executes `test-without-building`.
+Focused runs require repeatable `--only-testing <identifier>` selectors and
+`--expected-count <count>`. Full-graph exact counts are owned by
+`scripts/xcode-test-harness`.
 
 The harness selects `org.swift.64202608141a`, performs one
 `build-for-testing`, injects the snapshot's
@@ -18,14 +21,16 @@ The harness selects `org.swift.64202608141a`, performs one
 zero skips, zero expected failures, zero runtime warnings, and no internal tool
 errors. Dependency checkout bypasses Xcode's shared repository cache so a
 newly published package revision cannot be resolved from stale tag metadata
-without its commit tree. Local path dependencies are rejected unless
-`DATABASE_CLI_ALLOW_LOCAL_DEPENDENCIES=1` is explicitly set for diagnosis.
-The reviewed contracts are:
+without its commit tree. To diagnose unpublished cross-package changes, use
+`--diagnostic-source-root <prepared-copy>` with explicit absolute local package
+references in that copy. The harness preserves the original URL manifest and
+pins and records the diagnostic graph. Such results are local integration
+evidence; final verification uses the committed URL dependency graph.
 
 | Graph | Trait selection | Required logical tests |
-|---|---|---:|
-| Standard single root | none | 47 |
-| Explicit MultiBase | `DATABASE_CLI_TEST_TRAITS=MultiBase` | 60 |
+|---|---|---|
+| Standard single root | none | Harness-owned exact count |
+| Explicit MultiBase | `DATABASE_CLI_TEST_TRAITS=MultiBase` | Harness-owned exact count |
 
 Both graphs require zero failures, zero skips, zero expected failures, zero
 runtime warnings, and no internal tool errors.
@@ -65,7 +70,11 @@ explicit shell launch, controlling-terminal Tab completion, history
 permissions, secret redaction, companion version matching, missing-companion
 failure, standalone memory/file execution, child shutdown, a real
 authenticated `database serve` round trip, negative readiness, disposable
-profile/Keychain cleanup, and link separation.
+profile/Keychain cleanup, and link separation. Its `query-process-test` step
+checks first, continuation, zero-row and aggregate JSON pages plus zero-row
+JSONL column events through the real authenticated SQL command. Duplicate
+labels, all five rich value cases and typed NULL retain their exact shape;
+stdout and stderr evidence is preserved in the reported result directory.
 
 Native backend integration is owned by the adjacent Server package and uses
 the exact same three binaries:

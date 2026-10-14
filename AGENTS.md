@@ -29,8 +29,9 @@
 - Use `scripts/xcode-test-harness` with the pinned Swift snapshot and an
   external timeout. The harness must report exact counts and zero skips,
   expected failures, runtime warnings, or internal tool errors. The reviewed
-  standard contract is 47 logical tests. An isolated `MultiBase` graph
-  uses `DATABASE_CLI_TEST_TRAITS=MultiBase` and requires 60 logical tests.
+  standard and `MultiBase` exact counts are owned by
+  `scripts/xcode-test-harness`. An isolated `MultiBase` graph uses
+  `DATABASE_CLI_TEST_TRAITS=MultiBase`.
   The harness selects the trait in an isolated source copy and derives the
   expected count.
 - Use `scripts/process-test-harness` with adjacent, version-matched

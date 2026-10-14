@@ -153,8 +153,8 @@ func scalarBindingsBuildCanonicalParameters() throws {
     #expect(parameters.count == 2)
     #expect(parameters[0].position == 1)
     #expect(parameters[0].name == nil)
-    #expect(parameters[0].value == .int64(42))
+    #expect(parameters[0].value == .primitive(.int64(42)))
     #expect(parameters[1].position == 2)
     #expect(parameters[1].name == "name")
-    #expect(parameters[1].value == .string("alice"))
+    #expect(parameters[1].value == .primitive(.string("alice")))
 }

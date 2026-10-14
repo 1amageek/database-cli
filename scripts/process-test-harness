@@ -10,12 +10,59 @@ SERVER="${DATABASE_SERVER_EXECUTABLE:-}"
 SERVE_PID=""
 PROCESS_PROFILE=""
 
+private_server_pids() {
+  local pid command executable
+  while read -r pid command; do
+    executable="${command%% *}"
+    if [[ -n "$executable" && "$executable" -ef "$SERVER" ]]; then
+      printf '%s\n' "$pid"
+    fi
+  done < <(ps -axo pid=,command=)
+}
+
 cleanup() {
+  local original_status=$?
+  local cleanup_failed=0
+  trap - EXIT
   if [[ -n "$SERVE_PID" ]] && kill -0 "$SERVE_PID" 2>/dev/null; then
-    kill -TERM "$SERVE_PID" 2>/dev/null || true
+    kill -INT "$SERVE_PID" 2>/dev/null || true
+    for _ in {1..300}; do
+      kill -0 "$SERVE_PID" 2>/dev/null || break
+      sleep 0.05
+    done
+    if kill -0 "$SERVE_PID" 2>/dev/null; then
+      kill -TERM "$SERVE_PID" 2>/dev/null || true
+    fi
     wait "$SERVE_PID" 2>/dev/null || true
   fi
+  if [[ -n "$SERVER" && -n "$WORK_ROOT" ]]; then
+    local pid
+    while read -r pid; do
+      kill -TERM "$pid" 2>/dev/null || true
+      for _ in {1..100}; do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.05
+      done
+      if kill -0 "$pid" 2>/dev/null; then
+        echo "error: private server survived cleanup: $pid" >&2
+        kill -KILL "$pid" 2>/dev/null || true
+        cleanup_failed=1
+      fi
+    done < <(private_server_pids)
+    if [[ -n "$(private_server_pids)" ]]; then
+      echo "error: private server is still reachable as a process" >&2
+      cleanup_failed=1
+    else
+      echo "cleanup-process-absence=passed"
+    fi
+  fi
   if [[ -n "$PROCESS_PROFILE" && -n "$DATABASE" && -x "$DATABASE" ]]; then
+    if "$DATABASE" capabilities --profile "$PROCESS_PROFILE" >/dev/null 2>&1; then
+      echo "error: private server passed readiness after cleanup" >&2
+      cleanup_failed=1
+    else
+      echo "cleanup-negative-readiness=passed"
+    fi
     "$DATABASE" auth logout --profile "$PROCESS_PROFILE" \
       >/dev/null 2>&1 || true
     "$DATABASE" profile remove "$PROCESS_PROFILE" \
@@ -29,10 +76,24 @@ cleanup() {
     echo "error: refusing to remove unexpected harness path: $WORK_ROOT" >&2
     return
   fi
+  mkdir -p "$RESULT_DIRECTORY/State-$run_identifier"
+  for evidence in "$WORK_ROOT/serve.stdout" "$WORK_ROOT/serve.stderr"; do
+    if [[ -f "$evidence" ]]; then
+      cp "$evidence" "$RESULT_DIRECTORY/State-$run_identifier/"
+    fi
+  done
+  if (( cleanup_failed != 0 )); then
+    echo "error: retained private state after cleanup failure: $WORK_ROOT" >&2
+    exit 1
+  fi
   rm -rf -- "$WORK_ROOT"
+  exit "$original_status"
 }
 
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 124' ALRM
 
 for command in otool pgrep rg ruby stat; do
   if ! command -v "$command" >/dev/null 2>&1; then
@@ -40,6 +101,13 @@ for command in otool pgrep rg ruby stat; do
     exit 2
   fi
 done
+
+expected_version="$(ruby -e '
+source = File.read(ARGV.fetch(0))
+version = source[/public enum DatabaseCLIVersion\s*\{\s*public static let current = "([^"]+)"/, 1]
+abort "error: canonical CLI version is missing or malformed" unless version && /\A[0-9]+\.[0-9]+\.[0-9]+\z/.match?(version)
+puts version
+' "$ROOT_DIR/Sources/DatabaseCommandLine/DatabaseCLIApplication.swift")"
 
 for candidate in \
     "$ROOT_DIR/.build/arm64-apple-macosx/debug/database" \
@@ -76,6 +144,7 @@ mkdir -p "$install_directory"
 cp "$DATABASE" "$install_directory/database"
 cp "$HELPER" "$install_directory/database-fdb"
 cp "$SERVER" "$install_directory/database-server"
+install_directory="$(cd "$install_directory" && pwd -P)"
 DATABASE="$install_directory/database"
 HELPER="$install_directory/database-fdb"
 SERVER="$install_directory/database-server"
@@ -106,11 +175,11 @@ exec > >(tee "$log_path") 2>&1
 
   status="$(run_and_capture version "$DATABASE" --version)"
   [[ "$status" == "0" ]]
-  [[ "$(tr -d '\n' <"$WORK_ROOT/version.stdout")" == "26.0820.0" ]]
+  [[ "$(tr -d '\n' <"$WORK_ROOT/version.stdout")" == "$expected_version" ]]
 
   status="$(run_and_capture delegated-version "$DATABASE" fdb --version)"
   [[ "$status" == "0" ]]
-  [[ "$(tr -d '\n' <"$WORK_ROOT/delegated-version.stdout")" == "26.0820.0" ]]
+  [[ "$(tr -d '\n' <"$WORK_ROOT/delegated-version.stdout")" == "$expected_version" ]]
   [[ ! -s "$WORK_ROOT/delegated-version.stderr" ]]
 
   status="$(run_and_capture helper-invalid "$DATABASE" fdb invalid command)"
@@ -196,7 +265,24 @@ exec > >(tee "$log_path") 2>&1
   serve_database="$serve_directory/database.sqlite"
   PROCESS_PROFILE="process-$run_identifier"
   serve_configuration="$DATABASE_CLI_CONFIG_HOME/servers/$PROCESS_PROFILE/server.json"
-  "$DATABASE" serve "$serve_database" \
+  mkdir -p "$DATABASE_CLI_CONFIG_HOME/servers"
+  chmod 700 "$DATABASE_CLI_CONFIG_HOME"
+  chmod 700 "$DATABASE_CLI_CONFIG_HOME/servers"
+  mkdir -m 700 "$(dirname "$serve_configuration")"
+  ruby -rjson - "$serve_configuration" "$serve_database" "$serve_port" <<'RUBY'
+path, database, port = ARGV
+configuration = {
+  "formatVersion" => 3,
+  "storage" => {"kind" => "sqlite", "sqlite" => {"mode" => "file", "path" => database}},
+  "databaseRoot" => {"kind" => "engine"},
+  "host" => "127.0.0.1", "port" => Integer(port),
+  "routing" => {"databaseID" => "main"},
+  "tokenRegistryPath" => File.join(File.dirname(path), "tokens.json"),
+  "entityPolicies" => [{"entity" => "S01QueryPageFixture", "roles" => {"list" => ["admin"], "get" => ["admin"], "create" => ["admin"]}}]
+}
+File.open(path, File::WRONLY | File::CREAT | File::EXCL, 0600) { |file| file.write(JSON.generate(configuration)) }
+RUBY
+  "$DATABASE" serve --config "$serve_configuration" \
     --profile "$PROCESS_PROFILE" \
     --listen "127.0.0.1:$serve_port" \
     >"$WORK_ROOT/serve.stdout" 2>"$WORK_ROOT/serve.stderr" &
@@ -224,6 +310,9 @@ exec > >(tee "$log_path") 2>&1
     "$WORK_ROOT/serve-capabilities.stdout"
   [[ "$(stat -f '%Lp' "$serve_configuration")" == "600" ]]
   [[ "$(stat -f '%Lp' "$(dirname "$serve_configuration")/tokens.json")" == "600" ]]
+
+  bash "$ROOT_DIR/scripts/query-process-test" \
+    "$DATABASE" "$PROCESS_PROFILE" "$RESULT_DIRECTORY/Query-$run_identifier"
 
   kill -INT "$SERVE_PID"
   set +e

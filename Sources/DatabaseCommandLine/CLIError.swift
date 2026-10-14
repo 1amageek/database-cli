@@ -1,4 +1,5 @@
 import DatabaseClient
+import DatabaseKit
 import DatabaseWire
 import Foundation
 
@@ -31,6 +32,9 @@ extension DatabaseCLIError {
     static func map(_ error: any Error) -> Self {
         if let error = error as? Self {
             return error
+        }
+        if let error = error as? QueryValueError, case .resourceLimit = error {
+            return Self(.resourceLimit, "Query value exceeds its limits: \(error)")
         }
         if error is CancellationError {
             return Self(.cancelled, "Operation cancelled")

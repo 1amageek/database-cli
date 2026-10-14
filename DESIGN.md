@@ -162,9 +162,10 @@ request or clears buffered input; Ctrl-D exits and awaits session shutdown.
 
 ## Verification and Change Impact
 
-Expected counts and the harness procedure are owned by [AGENTS.md](AGENTS.md)
-and [Documentation/Testing.md](Documentation/Testing.md). This table maps each
-invariant to the gate that falsifies it.
+Expected logical test counts are owned by
+[scripts/xcode-test-harness](scripts/xcode-test-harness). [AGENTS.md](AGENTS.md)
+owns verification requirements, and [Documentation/Testing.md](Documentation/Testing.md)
+describes procedures. This table maps each invariant to the gate that falsifies it.
 
 | Invariant | Required evidence |
 |---|---|
@@ -174,6 +175,36 @@ invariant to the gate that falsifies it.
 | terminal interaction works on a real controlling terminal | `scripts/pty-shell-test` |
 | FoundationDB lifecycle and inspection are authoritative | `scripts/fdb-test-harness` with an isolated cluster file, protocol readiness, authoritative shutdown, and negative readiness after teardown |
 | `database` links no FoundationDB | release build of both executable products with URL-only dependencies, inspecting the main binary's linkage |
+
+The process harness owns its private executable copies, child processes and
+service endpoint on both success and failure. Cleanup first interrupts the CLI
+through its cancellation contract, then bounds the wait and terminates any
+remaining server whose executable file is the same private copy. File identity
+handles the native host's `/var` versus `/private/var` path normalization.
+It proves process absence and negative protocol readiness before deleting
+disposable state. Service stdout/stderr survive failed assertions in the result
+directory; cleanup failure cannot become a successful harness result.
+The private launch configuration grants only the fixture entity's list/get/create
+operations to the bootstrap admin role; authentication alone grants no entity
+access. Schema publication and two entity inserts prepare the paginated SQL
+fixture through their existing public operations.
+
+Native runs copy source into a harness-owned working directory and always run
+`build-for-testing` before runtime injection and `test-without-building`.
+Focused runs accept repeatable `--only-testing` selectors with an explicit
+positive `--expected-count`; full runs retain package-owned counts.
+`--preserve-work-root` and `--reuse-work-root` retain attributed DerivedData
+while resynchronizing source. A changed normalized manifest, input pins, or
+verification mode invalidates those products. Reuse does not bypass building.
+
+`--diagnostic-source-root` consumes a separate prepared copy with absolute local
+dependency overrides. Its results are diagnostic evidence, not final URL-graph
+verification. Resolution may remove only explicitly overridden local identities
+from the lock comparison; every remaining URL identity, location, version, and
+revision must remain unchanged. The original and prepared manifests and locks
+remain unchanged, verified by SHA-256, and the resolved graph and input digests
+are retained beside the result bundles. Final verification uses the original
+URL manifest and committed pins.
 
 Change impact:
 
@@ -188,6 +219,76 @@ Change impact:
   the link-time boundary and is rejected regardless of test results.
 
 ## Planned SQL Statement and Block Surface
+
+S01 migrates the existing query rendering path before S17 adds statement/block
+commands. It consumes [Kit typed query values](../database-kit/Sources/DatabaseKit/Query/DESIGN.md#s01-public-query-boundary)
+and [Wire positional pages](../database-kit/Sources/DatabaseWire/DESIGN.md#s01-frozen-query-codec-contract).
+ResultRenderer.swift must stop building JSON objects from column labels.
+FieldValueJSONEncoder/Decoder remain primitive-only; a QueryValueJSONEncoder
+and query-column/type presentation consume the semantic wrappers explicitly.
+WireRequestBuilder.swift and query parameter/fixture construction preserve
+QueryParameter's value and explicit declaration; transport/request code does
+not parse or evaluate SQL.
+
+| Output | S01 representation |
+|---|---|
+| JSON | Stream an array of page objects with ordered columns and rows. Each row has a positional values array plus its existing annotations/version/provenance metadata. A zero-row page still emits columns and an empty rows array. |
+| JSONL | Emit a columns event before each page's row events, including zero-row pages. Each row event contains positional values and row metadata; continuation/snapshot/consistency metadata remains explicit. |
+| Table / CSV | Retain duplicate headers and positional cells in declaration order. Typed rich-cell formatting uses bounded numeric display scale, original JSON lexical content, canonical JSONB, explicit array dimensions/lower bounds and separate interval components. These display formats do not claim lossless type round trip. |
+
+The structured QueryValue JSON shape has a closed `$type` discriminator.
+Primitive values use the existing primitive tagged JSON encoder. Rich numeric
+emits coefficient as a decimal string, canonical scale and displayScale;
+JSON emits original validated lexical text as a JSON string; JSONB emits the
+canonical typed node tree with ordered member pairs and numeric metadata;
+array emits elementType, ordered dimensions and positional elements; interval
+emits months, days and microseconds without component normalization. Query
+column declarations emit number/name/type/isNullable, using the strict native
+[query descriptor JSON grammar](../database-kit/Sources/DatabaseSchemaJSON/DESIGN.md#s01-query-descriptor-json).
+SQL NULL stays a primitive null cell whose type comes from its column. Numeric
+formatting never passes through Double; JSONB output is not a persisted envelope.
+
+The CLI owns the following exact rich-value grammar. Integer components are
+canonical decimal strings. `sqlArray` is distinct from the existing primitive
+`array` tag. JSONB nodes use `kind` with null/bool/string/number/array/object;
+non-null nodes carry `value`, and object values are ordered `{key,value}` pairs.
+
+| `$type` | Required additional members |
+|---|---|
+| numeric | coefficient, scale, displayScale |
+| json | value (original lexical text) |
+| jsonb | value (canonical typed node) |
+| sqlArray | elementType (SQL descriptor), dimensions (`lowerBound`, `length`), elements |
+| interval | months, days, microseconds |
+
+`QueryValueJSONEncoder` and `QueryValueJSONDecoder` own this grammar and use
+Kit's intrinsic constructors. `QueryColumnJSONCodec` consumes the native
+QueryColumnTypeJSONCodec text boundary. Structured parameter entries permit
+position/name/value/type; an absent or null type means no explicit declaration.
+Unknown members/tags, noncanonical integer components, incompatible declared
+types, and configured byte/depth limits fail before request execution.
+Query-value depth limits count semantic value nodes on both encode and decode.
+The native JSON scanner has a separate derived envelope limit of three times
+the semantic limit: a JSONB object parent introduces its node object, member
+array and member object before the child; a numeric leaf adds its component
+object and component strings. Other productions introduce no greater depth.
+This finite grammar bound admits an encoded value without weakening semantic
+depth admission; decoding still checks the resulting value against the same
+semantic limit. Multiplication overflow and nonpositive limits fail explicitly.
+JSONB construction consumes Kit's checked composite factories and immutable
+flat-owner collection views. The CLI retains its configured semantic depth
+bound and never reconstructs recursively owned JSONB storage.
+JSON page framing tracks prior pages separately from prior rows, so an empty
+first page cannot remove the separator before a following page.
+
+ResultRenderer.renderRows/rowJSON/tableValue/csvValue and streaming JSON page
+framing migrate together. S01 preserves row quotas, checked output bytes,
+stderr diagnostics, continuation identity and credential redaction. S01-C10
+must execute the real authenticated query command and capture stdout/stderr
+for first/continuation/zero-row pages with duplicate labels and rich cells;
+renderer unit fixtures alone are insufficient. Existing process/xcode harness
+owners and the backend-free main executable remain unchanged. The workspace
+progress record owns the real process evidence for these implemented S01 paths.
 
 S17 adds statement and SQL-file/block invocation through DatabaseClient, using
 the [SQL semantic profile](../database-kit/Sources/DatabaseKit/Query/SQL/DESIGN.md).

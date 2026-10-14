@@ -388,7 +388,8 @@ private extension RemoteCommandExecutor {
             return JSONPageFraming(
                 opensCollection: pages == 0,
                 closesCollection: !hasContinuation,
-                hasPriorElements: elements > 0
+                hasPriorElements: elements > 0,
+                hasPriorPages: pages > 0
             )
         }
     }

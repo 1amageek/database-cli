@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DATABASE="$1"
+PROFILE="$2"
+RESULT_DIRECTORY="$3"
+mkdir -p "$RESULT_DIRECTORY"
+
+cat >"$RESULT_DIRECTORY/schema.json" <<'JSON'
+{
+  "formatVersion":3,
+  "schemaVersion":{"major":2,"minor":0,"patch":0},
+  "entities":[{
+    "name":"S01QueryPageFixture",
+    "identifierType":{"kind":"string"},
+    "fields":[{"name":"id","number":1,"type":"string","optional":false,"array":false,"referenceTargetEntity":null,"queryType":null,"defaultValue":null}],
+    "directory":{"components":[{"kind":"static","value":"s01-query-page-fixture"}],"layer":"default"},
+    "indexes":[],"relationships":[],"fieldAccessRules":[],"enumMetadata":{},"ontology":null,"polymorphicMembership":null
+  }]
+}
+JSON
+cat >"$RESULT_DIRECTORY/entities.json" <<'JSON'
+{"changes":[
+  {"kind":"insert","identity":{"$type":"reference","entity":"S01QueryPageFixture","id":{"kind":"string","value":"first"},"partitions":{"$type":"object","value":{}}},"fields":{"$type":"object","value":{"id":{"$type":"string","value":"first"}}}},
+  {"kind":"insert","identity":{"$type":"reference","entity":"S01QueryPageFixture","id":{"kind":"string","value":"second"},"partitions":{"$type":"object","value":{}}},"fields":{"$type":"object","value":{"id":{"$type":"string","value":"second"}}}}
+]}
+JSON
+
+setup() {
+  local name="$1"
+  shift
+  perl -e 'alarm shift; exec @ARGV' 45 \
+    "$DATABASE" "$@" --profile "$PROFILE" \
+    >"$RESULT_DIRECTORY/$name.stdout" 2>"$RESULT_DIRECTORY/$name.stderr"
+  [[ ! -s "$RESULT_DIRECTORY/$name.stderr" ]]
+}
+
+setup schema-plan schema plan "@$RESULT_DIRECTORY/schema.json"
+fingerprint="$(ruby -rjson -e \
+  'plan = JSON.parse(File.read(ARGV[0])); abort "expected schema plan" unless plan.fetch("type") == "schemaPlan"; value = plan.fetch("currentFingerprint"); abort "missing current fingerprint" unless value.is_a?(String) && !value.empty?; puts value' \
+  "$RESULT_DIRECTORY/schema-plan.stdout")"
+setup schema-apply schema apply "@$RESULT_DIRECTORY/schema.json" \
+  --expected-fingerprint "$fingerprint" --idempotency-key s01-query-page-fixture
+job_identity="$(ruby -rjson -e \
+  'job = JSON.parse(File.read(ARGV[0])); abort "expected accepted schema job" unless job.fetch("event") == "accepted"; values = %w[id family kind].map { |key| job.fetch(key) }; abort "invalid schema job identity" unless values.all? { |value| value.is_a?(String) && !value.empty? && !value.match?(/\s/) }; puts values.join(" ")' \
+  "$RESULT_DIRECTORY/schema-apply.stdout")"
+read -r job_id job_family job_kind <<<"$job_identity"
+setup schema-wait job wait "$job_id" "$job_family" "$job_kind" \
+  --poll-interval-milliseconds 100 --wait-timeout-milliseconds 30000
+ruby -rjson -e \
+  'status = JSON.parse(File.read(ARGV[0])); abort "schema application did not succeed" unless status.fetch("state") == "succeeded"' \
+  "$RESULT_DIRECTORY/schema-wait.stdout"
+setup entity-apply entity apply "@$RESULT_DIRECTORY/entities.json" \
+  --idempotency-key s01-query-page-fixture-insert
+
+cat >"$RESULT_DIRECTORY/parameters.json" <<'JSON'
+[
+  {"position":"1","value":{"$type":"numeric","coefficient":"123","scale":"2","displayScale":"4"}},
+  {"position":"2","value":{"$type":"json","value":" {\"a\":1,\"a\":2} "}},
+  {"position":"3","value":{"$type":"jsonb","value":{"kind":"object","value":[{"key":"a","value":{"kind":"number","value":{"coefficient":"123","scale":"2","displayScale":"4"}}}]}}},
+  {"position":"4","value":{"$type":"sqlArray","elementType":{"kind":"sql","type":{"kind":"integer"}},"dimensions":[{"lowerBound":"-2","length":"2"}],"elements":[{"$type":"int32","value":"7"},{"$type":"null"}]}},
+  {"position":"5","value":{"$type":"interval","months":"-2","days":"3","microseconds":"-1"}},
+  {"position":"6","value":{"$type":"null"},"type":{"kind":"sql","type":{"kind":"bigint"}}}
+]
+JSON
+parameters="$(cat "$RESULT_DIRECTORY/parameters.json")"
+projection='SELECT $1 AS x, $2 AS x, $3 AS normalized, $4 AS shaped, $5 AS duration, $6 AS absent'
+statement="$projection FROM S01QueryPageFixture"
+
+query() {
+  local name="$1"
+  local sql="$2"
+  shift 2
+  perl -e 'alarm shift; exec @ARGV' 45 \
+    "$DATABASE" query sql "$sql" --profile "$PROFILE" \
+    --parameters "$parameters" --page-size 1 "$@" \
+    >"$RESULT_DIRECTORY/$name.stdout" 2>"$RESULT_DIRECTORY/$name.stderr"
+  [[ ! -s "$RESULT_DIRECTORY/$name.stderr" ]]
+}
+
+query first "$statement" --output json
+continuation="$(ruby -rjson -e \
+  'value = JSON.parse(File.read(ARGV[0])).fetch(0).fetch("$continuation"); abort "missing continuation" unless value.is_a?(String) && !value.empty?; puts value' \
+  "$RESULT_DIRECTORY/first.stdout")"
+query continued "$statement" --output json --continuation "$continuation"
+query empty "$statement WHERE FALSE" --output json
+query empty-lines "$statement WHERE FALSE" --output jsonl
+query all "$statement" --output json --all \
+  --max-pages 2 --max-total-rows 2 --max-total-bytes 1048576
+
+ruby -rjson - "$RESULT_DIRECTORY" <<'RUBY'
+root = ARGV.fetch(0)
+read = ->(name) { JSON.parse(File.read(File.join(root, "#{name}.stdout"))) }
+first = read.call("first")
+continued = read.call("continued")
+empty = read.call("empty")
+all = read.call("all")
+expected = JSON.parse(File.read(File.join(root, "parameters.json"))).map { |entry| entry.fetch("value") }
+raise "page counts" unless [first.length, continued.length, empty.length, all.length] == [1, 1, 1, 2]
+columns = first.fetch(0).fetch("columns")
+raise "ordered columns" unless columns.map { |column| column.fetch("number") } == %w[1 2 3 4 5 6]
+raise "duplicate labels" unless columns.map { |column| column.fetch("name") } == %w[x x normalized shaped duration absent]
+raise "typed NULL" unless columns.last.fetch("type") == {"kind" => "sql", "type" => {"kind" => "bigint"}}
+raise "nullable NULL" unless columns.last.fetch("isNullable")
+(first + continued + empty + all).each do |page|
+  raise "changed columns" unless page.fetch("columns") == columns
+  page.fetch("rows").each do |row|
+    raise "row kind" unless row.fetch("$type") == "row"
+    raise "lossy query values" unless row.fetch("values") == expected
+  end
+end
+raise "page row counts" unless [first[0]["rows"].length, continued[0]["rows"].length, empty[0]["rows"].length] == [1, 1, 0]
+raise "aggregate row count" unless all.sum { |page| page.fetch("rows").length } == 2
+raise "continuation lifecycle" unless continued[0].fetch("$continuation").nil? && empty[0].fetch("$continuation").nil?
+raise "aggregate continuation lifecycle" unless all[0].fetch("$continuation").is_a?(String) && all[1].fetch("$continuation").nil?
+events = File.readlines(File.join(root, "empty-lines.stdout"), chomp: true).map { |line| JSON.parse(line) }
+raise "zero-row columns event" unless events.first == {"$type" => "columns", "columns" => columns}
+raise "unexpected zero-row event" if events.any? { |event| event["$type"] == "row" }
+puts "S01-C10: authenticated first/continuation/empty/all pages and JSONL columns passed"
+RUBY

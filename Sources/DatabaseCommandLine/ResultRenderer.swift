@@ -46,11 +46,13 @@ struct JSONPageFraming: Sendable {
     let opensCollection: Bool
     let closesCollection: Bool
     let hasPriorElements: Bool
+    let hasPriorPages: Bool
 
     static let single = Self(
         opensCollection: true,
         closesCollection: true,
-        hasPriorElements: false
+        hasPriorElements: false,
+        hasPriorPages: false
     )
 }
 
@@ -164,8 +166,17 @@ public struct ResultRenderer: Sendable {
         #endif
         var count: UInt64 = 0
         var bytes: UInt64 = 0
-        if format == .json, jsonFraming.opensCollection {
-            bytes += UInt64(try output.result("["))
+        if format == .json {
+            let columnNodes = try page.columns.map(QueryColumnJSONCodec.node)
+            let prefix = (jsonFraming.opensCollection ? "[" : "")
+                + (jsonFraming.hasPriorPages ? "," : "")
+                + "{\"columns\":" + StrictJSONWriter.encode(.array(columnNodes)) + ",\"rows\":["
+            bytes += UInt64(try output.result(prefix))
+        } else if format == .jsonl {
+            let columnNodes = try page.columns.map(QueryColumnJSONCodec.node)
+            bytes += UInt64(try output.result(StrictJSONWriter.encode(.object([
+                ("$type", .string("columns")), ("columns", .array(columnNodes)),
+            ])) + "\n"))
         } else if format == .table {
             var columns = page.columns.map(\.name)
             #if DATABASE_CLI_MULTI_BASE
@@ -202,14 +213,12 @@ public struct ResultRenderer: Sendable {
             case .jsonl:
                 encoded = try rowJSON(
                     row,
-                    columns: page.columns,
                     provenance: provenanceNode
                 ) + "\n"
             case .json:
-                encoded = (count == 0 && !jsonFraming.hasPriorElements ? "" : ",")
+                encoded = (count == 0 ? "" : ",")
                     + (try rowJSON(
                         row,
-                        columns: page.columns,
                         provenance: provenanceNode
                     ))
             case .table:
@@ -236,9 +245,24 @@ public struct ResultRenderer: Sendable {
         #if DATABASE_CLI_MULTI_BASE
         try requireOriginsExhausted(&originIterator)
         #endif
-        if format == .json, jsonFraming.closesCollection {
-            bytes += UInt64(try output.result("]\n"))
+        if format == .json {
+            #if DATABASE_CLI_MULTI_BASE
+            let metadata: [(key: String, value: StrictJSONValue)] = [
+                ("$continuation", page.continuation.map { .string(Base64URL.encode($0)) } ?? .null),
+                ("$consistency", consistencyNode(page.consistency)),
+            ]
+            #else
+            let metadata: [(key: String, value: StrictJSONValue)] = [
+                ("$continuation", page.continuation.map { .string(Base64URL.encode($0)) } ?? .null),
+                ("$snapshotVersion", page.snapshotVersion.map { .string(String($0)) } ?? .null),
+            ]
+            #endif
+            let metadataText = StrictJSONWriter.encode(.object(metadata))
+            let suffix = "]," + String(metadataText.dropFirst().dropLast()) + "}"
+                + (jsonFraming.closesCollection ? "]\n" : "")
+            bytes += UInt64(try output.result(suffix))
         }
+        if format != .json {
         #if DATABASE_CLI_MULTI_BASE
         try renderPageMetadata(
             continuation: page.continuation,
@@ -254,6 +278,7 @@ public struct ResultRenderer: Sendable {
             bytes: &bytes
         )
         #endif
+        }
         return RenderedPage(
             elementCount: count,
             byteCount: bytes,
@@ -366,14 +391,12 @@ public struct ResultRenderer: Sendable {
 
     private func rowJSON(
         _ row: QueryRow,
-        columns: [QueryColumn],
         provenance: StrictJSONValue?
     ) throws -> String {
-        var fields: [(key: String, value: StrictJSONValue)] = []
-        fields.reserveCapacity(columns.count + 2)
-        for (column, value) in zip(columns, row.values) {
-            fields.append((column.name, try fieldEncoder.node(value)))
-        }
+        var fields: [(key: String, value: StrictJSONValue)] = [
+            ("$type", .string("row")),
+            ("values", .array(try row.values.map { try QueryValueJSONEncoder().node($0) })),
+        ]
         if let version = row.version {
             fields.append(("$version", .string(Base64URL.encode(version))))
         }
@@ -483,18 +506,19 @@ public struct ResultRenderer: Sendable {
             .replacingOccurrences(of: "\n", with: "\\n")
     }
 
-    private func tableValue(_ value: FieldValue) throws -> String {
-        try fieldEncoder.encode(value)
+    private func tableValue(_ value: QueryValue) throws -> String {
+        try QueryValueTextFormatter().format(value)
             .replacingOccurrences(of: "\t", with: "\\t")
             .replacingOccurrences(of: "\n", with: "\\n")
     }
 
-    private func csvValue(_ value: FieldValue) throws -> String {
+    private func csvValue(_ value: QueryValue) throws -> String {
         switch value {
-        case .array, .object, .reference, .rdfTerm, .vector:
+        case .primitive(.array), .primitive(.object), .primitive(.reference),
+             .primitive(.rdfTerm), .primitive(.vector):
             throw DatabaseCLIError(.input, "CSV output supports scalar rows only")
         default:
-            return csvEscape(try fieldEncoder.encode(value))
+            return csvEscape(try QueryValueTextFormatter().format(value))
         }
     }
 

@@ -371,21 +371,34 @@ struct WireRequestBuilder: Sendable {
         let entries = try node.array(named: "parameters")
         return try entries.map { entry in
             let object = try StrictJSONObject(entry)
-            try object.validateKeys(["position", "name", "value"])
+            try object.validateKeys(["position", "name", "value", "type"])
             let rawPosition = try object.required("position").string(named: "position")
-            guard let position = UInt32(rawPosition), position > 0 else {
+            guard let position = UInt32(rawPosition), position > 0, String(position) == rawPosition else {
                 throw DatabaseCLIError(.input, "Query parameter position is invalid")
             }
             let name = try object.optional("name")?.string(named: "name")
             if let name, name.isEmpty {
                 throw DatabaseCLIError(.input, "Query parameter name is empty")
             }
+            let value = try QueryValueJSONDecoder().decode(
+                StrictJSONWriter.encode(object.required("value"))
+            )
+            let type: QueryColumnType?
+            if let declaration = object.optional("type"), case .null = declaration {
+                type = nil
+            } else if let declaration = object.optional("type") {
+                type = try QueryColumnJSONCodec.type(declaration)
+            } else {
+                type = nil
+            }
+            if let type, !QueryValueValidator.accepts(value, type: type) {
+                throw DatabaseCLIError(.input, "Query parameter does not match its declared type")
+            }
             return QueryParameter(
                 position: position,
                 name: name,
-                value: try fieldDecoder.decode(
-                    StrictJSONWriter.encode(object.required("value"))
-                )
+                value: value,
+                type: type
             )
         }
     }
@@ -445,7 +458,7 @@ struct WireRequestBuilder: Sendable {
                 QueryParameter(
                     position: position,
                     name: name,
-                    value: try scalarDecoder.decode(literal)
+                    value: .primitive(try scalarDecoder.decode(literal))
                 )
             )
         }
