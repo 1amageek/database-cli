@@ -65,7 +65,7 @@ cat >"$RESULT_DIRECTORY/parameters.json" <<'JSON'
 JSON
 parameters="$(cat "$RESULT_DIRECTORY/parameters.json")"
 projection='SELECT $1 AS x, $2 AS x, $3 AS normalized, $4 AS shaped, $5 AS duration, $6 AS absent'
-statement="$projection FROM S01QueryPageFixture"
+statement="$projection FROM \"S01QueryPageFixture\""
 
 query() {
   local name="$1"
