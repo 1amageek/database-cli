@@ -27,7 +27,7 @@ struct QueryValueTextFormatter {
         case .json(let value):
             result = value.bytes.withUnsafeBytes { String(decoding: $0, as: UTF8.self) }
         case .jsonb(let value): result = StrictJSONWriter.encode(try jsonb(value.root))
-        case .array: result = try encoder.encode(value)
+        case .array, .composite: result = try encoder.encode(value)
         case .interval(let value):
             result = "months=\(value.period.months) days=\(value.period.days) microseconds=\(value.microseconds)"
         case .time(let value): result = time(value)

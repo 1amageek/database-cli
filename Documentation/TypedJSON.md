@@ -32,3 +32,18 @@ Input specifications are:
 - `@-` for a bounded standard-input read.
 
 An initial `@` is therefore reserved for input indirection.
+
+Query result values also admit the closed `composite` tag. Its exact members
+are `$type`, `type`, and `fields`. `type` contains the complete SQL composite
+query-column descriptor, including ordered field numbers, names, types, and
+nullability; `fields` contains one tagged query value per descriptor field.
+Duplicate field names retain their positions. A SQL NULL remains the existing
+`null` tagged value and differs from a present composite whose fields are all
+NULL. Arrays can contain composite values. Arity, type, nullability, unknown
+members, and byte/depth limits are checked before returning a value. Table and
+CSV cells render composites as the same bounded tagged JSON.
+
+Value-contained type descriptors use the value adapter's configured byte and
+semantic depth budgets. The internal descriptor JSON depth is bounded by three
+times semantic depth and the Wire-supported maximum; standalone result-column
+metadata retains its own default descriptor limits.

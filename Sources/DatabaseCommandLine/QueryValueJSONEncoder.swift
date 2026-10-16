@@ -45,12 +45,20 @@ public struct QueryValueJSONEncoder: Sendable {
         case .array(let value):
             return .object([
                 ("$type", .string("sqlArray")),
-                ("elementType", try QueryColumnJSONCodec.typeNode(.sql(value.elementType))),
+                ("elementType", try QueryColumnJSONCodec.typeNode(.sql(value.elementType), limits: QueryColumnJSONCodec.valueTypeLimits(
+                    maximumBytes: maximumOutputBytes, semanticDepth: maximumDepth))),
                 ("dimensions", .array(value.dimensions.map { dimension in
                     .object([("lowerBound", .string(String(dimension.lowerBound))),
                              ("length", .string(String(dimension.length)))])
                 })),
                 ("elements", .array(try value.elements.map(valueNode))),
+            ])
+        case .composite(let value):
+            return .object([
+                ("$type", .string("composite")),
+                ("type", try QueryColumnJSONCodec.typeNode(.sql(.composite(value.type)), limits: QueryColumnJSONCodec.valueTypeLimits(
+                    maximumBytes: maximumOutputBytes, semanticDepth: maximumDepth))),
+                ("fields", .array(try value.fields.map(valueNode))),
             ])
         case .interval(let value):
             return .object([

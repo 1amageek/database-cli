@@ -260,6 +260,26 @@ non-null nodes carry `value`, and object values are ordered `{key,value}` pairs.
 | jsonb | value (canonical typed node) |
 | sqlArray | elementType (SQL descriptor), dimensions (`lowerBound`, `length`), elements |
 | interval | months, days, microseconds |
+| composite | type (the complete SQL composite QueryColumnType descriptor), fields (ordered tagged QueryValue cells) |
+
+S08's composite object has exactly `$type`, `type` and `fields`. The descriptor
+uses [Kit's strict result descriptor JSON](../database-kit/Sources/DatabaseSchemaJSON/DESIGN.md#s01-query-descriptor-json),
+including ordinals, exact names, types and nullability. Kit's intrinsic
+composite constructor validates that descriptor against the positional fields.
+The existing primitive NULL tag represents whole-value NULL with the external
+declared type; a present all-NULL composite retains its composite tag. Nested
+arrays/composites preserve the same grammar. Table/CSV uses bounded tagged
+JSON for composite display. Malformed descriptors, field arity/type/nullability,
+unknown/duplicate/missing members and cumulative semantic/JSON byte/depth
+limits fail through the existing CLI input/resource categories. Value-contained
+type descriptors receive that value adapter's configured byte budget and a
+checked JSON-depth ceiling of three times its semantic-depth limit, capped by
+Wire's supported depth. Standalone column metadata keeps its default descriptor
+policy. Descriptor physical construction retains Kit's finite checked ceiling;
+no unbounded fallback is admitted. Result-only carriage grants no persisted
+schema or model capability. QueryValueJSONTests
+owns exact round trips, retained nested values, NULL distinctions and negative
+boundaries; public parameter/result tests prove the actual consumer path.
 
 `QueryValueJSONEncoder` and `QueryValueJSONDecoder` own this grammar and use
 Kit's intrinsic constructors. `QueryColumnJSONCodec` consumes the native

@@ -42,7 +42,69 @@ public struct QueryValueJSONDecoder: Sendable {
         }
     }
 
+    private enum ValueTask {
+        case node(StrictJSONValue, depth: Int)
+        case array(DataType, [QueryArrayDimension], childCount: Int)
+        case composite(QueryCompositeType, childCount: Int)
+    }
+
     func decode(_ node: StrictJSONValue, depth: Int) throws -> QueryValue {
+        let descriptorLimits = try QueryColumnJSONCodec.valueTypeLimits(
+            maximumBytes: maximumBytes, semanticDepth: maximumDepth)
+        var builder = QueryValueBuilder(limits: limits)
+        var tasks: [ValueTask] = [.node(node, depth: depth)]
+        var results: [Int] = []
+        while let task = tasks.popLast() {
+            switch task {
+            case .node(let node, let depth):
+                guard depth <= maximumDepth else {
+                    throw DatabaseCLIError(.resourceLimit, "QueryValue nesting limit exceeded")
+                }
+                let object = try StrictJSONObject(node)
+                let tag = try object.required("$type").string(named: "$type")
+                let children: [StrictJSONValue]
+                if tag == "sqlArray" {
+                    try object.validateKeys(["$type", "elementType", "dimensions", "elements"])
+                    guard case .sql(let elementType) = try QueryColumnJSONCodec.type(object.required("elementType"), limits: descriptorLimits) else {
+                        throw DatabaseCLIError(.input, "SQL array element type must be a SQL descriptor")
+                    }
+                    let dimensions = try object.required("dimensions").array(named: "dimensions").map { node in
+                        let dimension = try StrictJSONObject(node)
+                        try dimension.validateKeys(["lowerBound", "length"])
+                        return try QueryArrayDimension(lowerBound: integer(dimension, "lowerBound"),
+                            length: integer(dimension, "length"))
+                    }
+                    children = try object.required("elements").array(named: "elements")
+                    tasks.append(.array(elementType, dimensions, childCount: children.count))
+                } else if tag == "composite" {
+                    try object.validateKeys(["$type", "type", "fields"])
+                    guard case .sql(.composite(let type)) = try QueryColumnJSONCodec.type(object.required("type"), limits: descriptorLimits) else {
+                        throw DatabaseCLIError(.input, "Composite type must be a SQL composite descriptor")
+                    }
+                    children = try object.required("fields").array(named: "fields")
+                    tasks.append(.composite(type, childCount: children.count))
+                } else {
+                    results.append(try builder.append(decodeScalar(node, depth: depth)))
+                    continue
+                }
+                for child in children.reversed() { tasks.append(.node(child, depth: depth + 1)) }
+            case .array(let type, let dimensions, let count):
+                let children = Array(results.suffix(count))
+                results.removeLast(count)
+                results.append(try builder.appendArray(elementType: type, dimensions: dimensions, elements: children))
+            case .composite(let type, let count):
+                let children = Array(results.suffix(count))
+                results.removeLast(count)
+                results.append(try builder.appendComposite(type: type, fields: children))
+            }
+        }
+        guard results.count == 1, let root = results.first else {
+            throw DatabaseCLIError(.input, "Invalid query value construction")
+        }
+        return try builder.finish(root: root)
+    }
+
+    private func decodeScalar(_ node: StrictJSONValue, depth: Int) throws -> QueryValue {
         guard depth <= maximumDepth else {
             throw DatabaseCLIError(.resourceLimit, "QueryValue nesting limit exceeded")
         }
@@ -57,22 +119,6 @@ public struct QueryValueJSONDecoder: Sendable {
         case "jsonb":
             try object.validateKeys(["$type", "value"])
             return .jsonb(try QueryJSONBValue(root: jsonb(object.required("value"), depth: depth + 1), limits: limits))
-        case "sqlArray":
-            try object.validateKeys(["$type", "elementType", "dimensions", "elements"])
-            guard case .sql(let elementType) = try QueryColumnJSONCodec.type(object.required("elementType")) else {
-                throw DatabaseCLIError(.input, "SQL array element type must be a SQL descriptor")
-            }
-            let dimensions = try object.required("dimensions").array(named: "dimensions").map { node in
-                let dimension = try StrictJSONObject(node)
-                try dimension.validateKeys(["lowerBound", "length"])
-                return try QueryArrayDimension(lowerBound: integer(dimension, "lowerBound"),
-                                               length: integer(dimension, "length"))
-            }
-            let elements = try object.required("elements").array(named: "elements").map {
-                try decode($0, depth: depth + 1)
-            }
-            return .array(try QueryArrayValue(elementType: elementType, dimensions: dimensions,
-                                              elements: elements, limits: limits))
         case "sqlTime":
             try object.validateKeys(["$type", "microseconds"])
             return .time(try QueryTimeValue(microsecondsSinceMidnight: integer(object, "microseconds")))
