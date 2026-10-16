@@ -59,6 +59,27 @@ public struct QueryValueJSONEncoder: Sendable {
                 ("days", .string(String(value.period.days))),
                 ("microseconds", .string(String(value.microseconds))),
             ])
+        case .time(let value):
+            return .object([("$type", .string("sqlTime")),
+                            ("microseconds", .string(String(value.microsecondsSinceMidnight)))])
+        case .timeWithTimeZone(let value):
+            return .object([("$type", .string("sqlTimeWithTimeZone")),
+                            ("microseconds", .string(String(value.time.microsecondsSinceMidnight))),
+                            ("utcOffsetSeconds", .string(String(value.utcOffsetSeconds)))])
+        case .dateInfinity(let sign):
+            return .object([("$type", .string("dateInfinity")), ("sign", infinityNode(sign))])
+        case .timestampInfinity(let sign, let withTimeZone):
+            return .object([("$type", .string("timestampInfinity")), ("sign", infinityNode(sign)),
+                            ("withTimeZone", .bool(withTimeZone))])
+        case .intervalInfinity(let sign):
+            return .object([("$type", .string("intervalInfinity")), ("sign", infinityNode(sign))])
+        }
+    }
+
+    private func infinityNode(_ sign: QueryTemporalInfinity) -> StrictJSONValue {
+        switch sign {
+        case .negative: .string("negative")
+        case .positive: .string("positive")
         }
     }
 

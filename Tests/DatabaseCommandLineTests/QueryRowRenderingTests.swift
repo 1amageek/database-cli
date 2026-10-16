@@ -7,6 +7,50 @@ import Testing
 
 @Suite("Typed query row rendering contracts")
 struct QueryRowRenderingTests {
+    @Test("Temporal row values retain tags, endpoint text, offsets and positional declarations")
+    func temporalCellsAcrossFormats() throws {
+        let time = try QueryTimeValue(microsecondsSinceMidnight: 86_400_000_000)
+        let intervalType = DataType.interval(fields: .dayToSecond, precision: 3)
+        let values: [QueryValue] = [
+            .time(time), .timeWithTimeZone(QueryTimeWithTimeZoneValue(time: time, utcOffsetSeconds: .min)),
+            .dateInfinity(.negative), .timestampInfinity(.positive, withTimeZone: false),
+            .timestampInfinity(.negative, withTimeZone: true), .intervalInfinity(.positive), .primitive(.null),
+        ]
+        let types: [DataType] = [
+            .time(withTimeZone: false, precision: 6), .time(withTimeZone: true, precision: 6), .date,
+            .timestamp(withTimeZone: false, precision: nil), .timestamp(withTimeZone: true, precision: nil),
+            intervalType, intervalType,
+        ]
+        let columns = try types.enumerated().map { index, type in
+            try QueryColumn(number: UInt32(index + 1), name: "value", type: .sql(type), isNullable: index == 6)
+        }
+        let page = try queryPage(columns: columns, rows: [QueryRow(values: values)])
+        for format in [OutputFormat.json, .jsonl] {
+            let (rendered, text) = try withQueryOutput { output in
+                try ResultRenderer(output: output).renderQuery(.rows(page), format: format)
+            }
+            let (actualColumns, rows) = try rowEvents(text, format: format)
+            try expectColumns(actualColumns, equalTo: columns)
+            #expect(try decodedCells(StrictJSONObject(#require(rows.first))) == values)
+            #expect(rendered.elementCount == 1)
+            #expect(rendered.byteCount == UInt64(text.utf8.count))
+        }
+        let cells = ["24:00:00.000000", "24:00:00.000000-596523:14:08", "-infinity", "infinity", "-infinity", "infinity", #"{"$type":"null"}"#]
+        for format in [OutputFormat.table, .csv] {
+            let (rendered, text) = try withQueryOutput { output in
+                try ResultRenderer(output: output).renderQuery(.rows(page), format: format)
+            }
+            let separator = format == .table ? "\t" : ","
+            let displayed = format == .table ? cells : cells.map { value in
+                value.contains("\"") ? "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : value
+            }
+            #expect(text == Array(repeating: "value", count: values.count).joined(separator: separator)
+                + "\n" + displayed.joined(separator: separator) + "\n")
+            #expect(rendered.elementCount == 1)
+            #expect(rendered.byteCount == UInt64(text.utf8.count))
+        }
+    }
+
     @Test("JSON and JSONL retain duplicate column names and positional cells")
     func duplicateColumnsAndPositionalCells() throws {
         let columns = try duplicateColumns()
@@ -34,6 +78,7 @@ struct QueryRowRenderingTests {
         let columns = [
             try QueryColumn(number: 1, name: "amount", type: .sql(.decimal(precision: 12, scale: 4)), isNullable: true),
             try QueryColumn(number: 2, name: "items", type: .sql(.array(.integer)), isNullable: false),
+            try QueryColumn(number: 3, name: "elapsed", type: .sql(.interval(fields: .dayToSecond, precision: 3)), isNullable: true),
         ]
         let page = try queryPage(columns: columns, rows: [])
         for format in [OutputFormat.json, .jsonl] {

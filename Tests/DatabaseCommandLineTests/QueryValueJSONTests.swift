@@ -10,6 +10,171 @@ private let queryJSONTestLimits = QueryValueLimits(
 
 @Suite("Query value JSON contracts")
 struct QueryValueJSONTests {
+    @Test("Temporal carriers preserve exact tagged values and full offset identity")
+    func temporalTaggedRoundTrips() throws {
+        for micros: Int64 in [0, 1, 999_999, 1_000_001, 86_399_999_999, 86_400_000_000] {
+            let time = try QueryTimeValue(microsecondsSinceMidnight: micros)
+            let plain = #"{"$type":"sqlTime","microseconds":"\#(micros)"}"#
+            #expect(try QueryValueJSONEncoder().encode(.time(time)) == plain)
+            #expect(try QueryValueJSONDecoder().decode(plain) == .time(time))
+            for offset: Int32 in [.min, -57_599, -1, 0, 1, 57_599, .max] {
+                let value = QueryValue.timeWithTimeZone(QueryTimeWithTimeZoneValue(time: time, utcOffsetSeconds: offset))
+                let tagged = #"{"$type":"sqlTimeWithTimeZone","microseconds":"\#(micros)","utcOffsetSeconds":"\#(offset)"}"#
+                #expect(try QueryValueJSONEncoder().encode(value) == tagged)
+                #expect(try QueryValueJSONDecoder().decode(tagged) == value)
+            }
+        }
+        for (sign, name): (QueryTemporalInfinity, String) in [(.negative, "negative"), (.positive, "positive")] {
+            for (value, tagged): (QueryValue, String) in [
+                (.dateInfinity(sign), #"{"$type":"dateInfinity","sign":"\#(name)"}"#),
+                (.timestampInfinity(sign, withTimeZone: false), #"{"$type":"timestampInfinity","sign":"\#(name)","withTimeZone":false}"#),
+                (.timestampInfinity(sign, withTimeZone: true), #"{"$type":"timestampInfinity","sign":"\#(name)","withTimeZone":true}"#),
+                (.intervalInfinity(sign), #"{"$type":"intervalInfinity","sign":"\#(name)"}"#),
+            ] {
+                #expect(try QueryValueJSONEncoder().encode(value) == tagged)
+                #expect(try QueryValueJSONDecoder().decode(tagged) == value)
+                expectQueryCLIError(.resourceLimit) { _ = try QueryValueJSONDecoder(maximumBytes: 8).decode(tagged) }
+                expectQueryCLIError(.resourceLimit) { _ = try QueryValueJSONEncoder(maximumOutputBytes: 8).encode(value) }
+            }
+        }
+        let time = try QueryTimeValue(microsecondsSinceMidnight: 86_400_000_000)
+        for (value, type): (QueryValue, DataType) in [
+            (.time(time), .time(withTimeZone: false, precision: nil)),
+            (.timeWithTimeZone(QueryTimeWithTimeZoneValue(time: time, utcOffsetSeconds: .max)), .time(withTimeZone: true, precision: nil)),
+            (.dateInfinity(.positive), .date),
+            (.timestampInfinity(.negative, withTimeZone: true), .timestamp(withTimeZone: true, precision: nil)),
+            (.intervalInfinity(.negative), .interval()),
+        ] {
+            let array = QueryValue.array(try QueryArrayValue(elementType: type,
+                dimensions: [QueryArrayDimension(lowerBound: -1, length: 2)],
+                elements: [value, .primitive(.null)], limits: queryJSONTestLimits))
+            let tagged = try QueryValueJSONEncoder().encode(array)
+            #expect(try QueryValueJSONDecoder().decode(tagged) == array)
+            expectQueryCLIError(.resourceLimit) { _ = try QueryValueJSONDecoder(maximumDepth: 1).decode(tagged) }
+        }
+    }
+
+    @Test("Finite primitive temporal tags remain byte-for-byte unchanged")
+    func finitePrimitiveTemporalGoldens() throws {
+        for tagged in [
+            #"{"$type":"date","year":"2024","month":"2","day":"29"}"#,
+            #"{"$type":"time","hour":"23","minute":"59","second":"59","nanoseconds":"999999000"}"#,
+            #"{"$type":"dateTime","date":{"$type":"date","year":"2024","month":"2","day":"29"},"time":{"$type":"time","hour":"0","minute":"0","second":"0","nanoseconds":"0"}}"#,
+            #"{"$type":"timestamp","seconds":"-1","nanoseconds":"999999000"}"#,
+            #"{"$type":"interval","months":"-2","days":"3","microseconds":"-1"}"#,
+        ] {
+            let value = try QueryValueJSONDecoder().decode(tagged)
+            #expect(try QueryValueJSONEncoder().encode(value) == tagged)
+        }
+    }
+
+    @Test("Temporal tagged input rejects invalid shape, endpoints and canonical integers")
+    func rejectsMalformedTemporalGrammar() {
+        for tagged in [
+            #"{"$type":"sqlTime"}"#, #"{"$type":"sqlTime","microseconds":"-1"}"#,
+            #"{"$type":"sqlTime","microseconds":"86400000001"}"#,
+            #"{"$type":"sqlTime","microseconds":"0","extra":true}"#,
+            #"{"$type":"sqlTime","microseconds":"0","microseconds":"1"}"#,
+            #"{"$type":"sqlTimeWithTimeZone","microseconds":"0"}"#,
+            #"{"$type":"sqlTimeWithTimeZone","microseconds":"0","utcOffsetSeconds":"2147483648"}"#,
+            #"{"$type":"sqlTimeWithTimeZone","microseconds":"0","utcOffsetSeconds":"-2147483649"}"#,
+            #"{"$type":"dateInfinity","sign":"infinity"}"#,
+            #"{"$type":"dateInfinity","sign":"positive","value":"infinity"}"#,
+            #"{"$type":"timestampInfinity","sign":"positive"}"#,
+            #"{"$type":"timestampInfinity","sign":"positive","withTimeZone":"true"}"#,
+            #"{"$type":"intervalInfinity","sign":"positive","months":"0"}"#,
+            #"{"$type":"intervalInfinity","sign":"negative","sign":"positive"}"#,
+        ] { expectQueryCLIError(.input) { _ = try QueryValueJSONDecoder().decode(tagged) } }
+        for number in ["01", "+1", "-0", "1.0", " 1", "9223372036854775808"] {
+            for tagged in [
+                #"{"$type":"sqlTime","microseconds":"\#(number)"}"#,
+                #"{"$type":"sqlTimeWithTimeZone","microseconds":"0","utcOffsetSeconds":"\#(number)"}"#,
+            ] { expectQueryCLIError(.input) { _ = try QueryValueJSONDecoder().decode(tagged) } }
+        }
+        expectQueryCLIError(.input) { _ = try QueryValueJSONDecoder().decode(#"{"$type":"sqlTime","microseconds":0}"#) }
+    }
+
+    @Test("Temporal text retains midnight endpoint, microseconds, full offsets and infinity")
+    func temporalTextAndLimits() throws {
+        let formatter = QueryValueTextFormatter()
+        for (micros, expected): (Int64, String) in [
+            (0, "00:00:00.000000"), (1, "00:00:00.000001"),
+            (86_399_999_999, "23:59:59.999999"), (86_400_000_000, "24:00:00.000000"),
+        ] {
+            let time = try QueryTimeValue(microsecondsSinceMidnight: micros)
+            #expect(try formatter.format(.time(time)) == expected)
+            for (offset, suffix): (Int32, String) in [
+                (.min, "-596523:14:08"), (-19_800, "-05:30:00"), (-1, "-00:00:01"),
+                (0, "+00:00:00"), (1, "+00:00:01"), (19_800, "+05:30:00"), (.max, "+596523:14:07"),
+            ] {
+                let value = QueryValue.timeWithTimeZone(QueryTimeWithTimeZoneValue(time: time, utcOffsetSeconds: offset))
+                #expect(try formatter.format(value) == expected + suffix)
+                expectQueryCLIError(.resourceLimit) { _ = try QueryValueTextFormatter(maximumBytes: 1).format(value) }
+            }
+        }
+        for (sign, expected): (QueryTemporalInfinity, String) in [(.negative, "-infinity"), (.positive, "infinity")] {
+            for value: QueryValue in [.dateInfinity(sign), .timestampInfinity(sign, withTimeZone: false),
+                                      .timestampInfinity(sign, withTimeZone: true), .intervalInfinity(sign)] {
+                #expect(try formatter.format(value) == expected)
+                expectQueryCLIError(.resourceLimit) { _ = try QueryValueTextFormatter(maximumBytes: 1).format(value) }
+            }
+        }
+    }
+
+    @Test("Temporal parameters preserve declared families and reject zone mismatches")
+    func temporalDeclaredParameterTypes() throws {
+        let time = try QueryTimeValue(microsecondsSinceMidnight: 86_400_000_000)
+        let values: [(QueryValue, DataType)] = [
+            (.time(time), .time(withTimeZone: false, precision: 6)),
+            (.timeWithTimeZone(QueryTimeWithTimeZoneValue(time: time, utcOffsetSeconds: .min)), .time(withTimeZone: true, precision: 6)),
+            (.dateInfinity(.positive), .date),
+            (.timestampInfinity(.negative, withTimeZone: false), .timestamp(withTimeZone: false, precision: 3)),
+            (.timestampInfinity(.positive, withTimeZone: true), .timestamp(withTimeZone: true, precision: nil)),
+            (.intervalInfinity(.negative), .interval(fields: .dayToSecond, precision: 3)),
+        ]
+        for (value, type) in values {
+            let specification = StrictJSONWriter.encode(.array([.object([
+                ("position", .string("1")), ("value", try QueryValueJSONEncoder().node(value)),
+                ("type", try QueryColumnJSONCodec.typeNode(.sql(type))),
+            ])]))
+            let parameters = try WireRequestBuilder().parameters(CommandOptions(["parameters": [specification]]))
+            #expect(parameters == [QueryParameter(position: 1, value: value, type: .sql(type))])
+        }
+        for (value, type): (QueryValue, DataType) in [
+            (.dateInfinity(.positive), .text),
+            (.timestampInfinity(.positive, withTimeZone: false), .timestamp(withTimeZone: true, precision: nil)),
+            (.timestampInfinity(.positive, withTimeZone: true), .timestamp(withTimeZone: false, precision: nil)),
+            (.intervalInfinity(.positive), .date),
+            (.time(time), .time(withTimeZone: true, precision: nil)),
+        ] {
+            let specification = StrictJSONWriter.encode(.array([.object([
+                ("position", .string("1")), ("value", try QueryValueJSONEncoder().node(value)),
+                ("type", try QueryColumnJSONCodec.typeNode(.sql(type))),
+            ])]))
+            expectQueryCLIError(.input) { _ = try WireRequestBuilder().parameters(CommandOptions(["parameters": [specification]])) }
+        }
+    }
+
+    @Test("Interval modifiers survive descriptor, NULL parameter and empty array boundaries")
+    func intervalDescriptorCarriage() throws {
+        for fields in SQLIntervalFields.allCases {
+            let type = QueryColumnType.sql(.interval(fields: fields, precision: nil))
+            #expect(try QueryColumnJSONCodec.type(QueryColumnJSONCodec.typeNode(type)) == type)
+        }
+        let type = DataType.interval(fields: .dayToSecond, precision: 3)
+        let descriptor = try QueryColumnJSONCodec.typeNode(.sql(type))
+        #expect(try QueryColumnJSONCodec.type(descriptor) == .sql(type))
+        #expect(StrictJSONWriter.encode(descriptor) == #"{"kind":"sql","type":{"kind":"interval","fields":"dayToSecond","precision":3}}"#)
+        let empty = QueryValue.array(try QueryArrayValue(elementType: type, dimensions: [], elements: [], limits: queryJSONTestLimits))
+        #expect(try QueryValueJSONDecoder().decode(QueryValueJSONEncoder().encode(empty)) == empty)
+        let specification = StrictJSONWriter.encode(.array([.object([
+            ("position", .string("1")), ("value", .object([("$type", .string("null"))])), ("type", descriptor),
+        ])]))
+        #expect(try WireRequestBuilder().parameters(CommandOptions(["parameters": [specification]])) == [
+            QueryParameter(position: 1, value: .primitive(.null), type: .sql(type)),
+        ])
+    }
+
     @Test("Every query value case preserves its identity through tagged JSON")
     func allCasesRoundTrip() throws {
         let numeric = try QueryNumericValue(

@@ -9,7 +9,7 @@ struct QueryValueTextFormatter {
     }
 
     func format(_ value: QueryValue) throws -> String {
-        // Validate the finite value graph before recursively building display text.
+        // Validate the bounded value graph before recursively building display text.
         let encoder = QueryValueJSONEncoder(maximumOutputBytes: maximumBytes)
         guard maximumBytes > 0 else {
             throw DatabaseCLIError(.resourceLimit, "QueryValue display limit must be positive")
@@ -30,11 +30,38 @@ struct QueryValueTextFormatter {
         case .array: result = try encoder.encode(value)
         case .interval(let value):
             result = "months=\(value.period.months) days=\(value.period.days) microseconds=\(value.microseconds)"
+        case .time(let value): result = time(value)
+        case .timeWithTimeZone(let value):
+            let offset = Int64(value.utcOffsetSeconds)
+            let magnitude = offset < 0 ? -offset : offset
+            result = time(value.time) + (offset < 0 ? "-" : "+")
+                + padded(magnitude / 3600, digits: 2) + ":"
+                + padded(magnitude / 60 % 60, digits: 2) + ":"
+                + padded(magnitude % 60, digits: 2)
+        case .dateInfinity(let sign), .timestampInfinity(let sign, _), .intervalInfinity(let sign):
+            switch sign {
+            case .negative: result = "-infinity"
+            case .positive: result = "infinity"
+            }
         }
         guard result.utf8.count <= maximumBytes else {
             throw DatabaseCLIError(.resourceLimit, "QueryValue display exceeds the output byte limit")
         }
         return result
+    }
+
+    private func time(_ value: QueryTimeValue) -> String {
+        let micros = value.microsecondsSinceMidnight
+        let seconds = micros / 1_000_000
+        return padded(seconds / 3600, digits: 2) + ":"
+            + padded(seconds / 60 % 60, digits: 2) + ":"
+            + padded(seconds % 60, digits: 2) + "."
+            + padded(micros % 1_000_000, digits: 6)
+    }
+
+    private func padded(_ value: Int64, digits: Int) -> String {
+        let text = String(value)
+        return String(repeating: "0", count: max(0, digits - text.utf8.count)) + text
     }
 
     private func numeric(_ value: QueryNumericValue) throws -> String {

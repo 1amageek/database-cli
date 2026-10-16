@@ -117,7 +117,7 @@ breadth here is a diagnostic requirement, not a serving capability.
 - Access tokens never appear in process arguments, profile files, shell
   history, result output, or diagnostics.
 - Structured values use lossless tagged JSON. Duplicate keys, untagged numbers,
-  unknown tags, non-finite values, and configured depth or byte limits are
+  unknown tags, non-finite numeric values, and configured depth or byte limits are
   rejected rather than coerced.
 - Result pages are consumed through owner-retaining iterators: one element is
   rendered at a time and one page is released before the next is requested.
@@ -309,3 +309,85 @@ changes when S17 begins. Process verification covers real SQL-file execution,
 stdout/stderr, rollback readback, cancellation, and authoritative child stop;
 Wire-mapping tests alone do not prove execution. User profile/credential and
 main-executable link-separation contracts remain unchanged.
+
+## S06 Temporal Boundary
+
+This section defines the CLI-owned temporal adapter contract frozen by
+[the S06 workspace decision](../.codex-tools/sql-s06-evidence/s06-contract-freeze.json).
+The source and behavioral test batch implements this contract; runtime
+verification remains pending. The user's inclusion of DATE, TIMESTAMP,
+TIMESTAMPTZ and INTERVAL infinity is authoritative; the numeric nonfinite
+restriction does not exclude these explicitly tagged temporal values.
+The [SQL profile](../database-kit/Sources/DatabaseKit/Query/SQL/DESIGN.md) owns
+semantic carriers and declared-type admission; [SQLTemporal](../database-framework/Sources/DatabaseEngine/QueryExecution/SQLTemporal/DESIGN.md)
+owns lexical conversion, calendar behavior and SQL formatting. CLI rendering
+does not evaluate those semantics or obtain a host timezone.
+
+```text
+typed parameter JSON -> QueryValueJSONDecoder -> Kit intrinsic constructors
+    -> explicit QueryColumnType admission -> DatabaseClient
+
+Wire QueryValue + column declaration -> QueryValueJSONEncoder -> JSON / JSONL
+                                    -> QueryValueTextFormatter -> table / CSV
+
+interval descriptor <-> QueryColumnJSONCodec <-> Kit QueryColumnTypeJSONCodec
+```
+
+The CLI retains every existing finite primitive tag, including `date`, `time`,
+`dateTime` and `timestamp`, and the existing finite `interval` component shape.
+It adds the following closed QueryValue productions. Listed members are all
+required; additional or duplicate members fail. Integer components are
+canonical decimal strings, not inferred JSON numbers.
+
+| `$type` | Required additional members | Kit value |
+|---|---|---|
+| `sqlTime` | `microseconds` | `QueryValue.time`, `QueryTimeValue.microsecondsSinceMidnight` |
+| `sqlTimeWithTimeZone` | `microseconds`, `utcOffsetSeconds` | `QueryValue.timeWithTimeZone`; local time plus seconds east of UTC |
+| `dateInfinity` | `sign` | `QueryValue.dateInfinity` |
+| `timestampInfinity` | `sign`, `withTimeZone` | `QueryValue.timestampInfinity`, retaining its Boolean zone flag |
+| `intervalInfinity` | `sign` | `QueryValue.intervalInfinity` |
+
+`microseconds` is in the inclusive range 0...86400000000. `utcOffsetSeconds`
+preserves the entire Int32 range; a CLI adapter cannot impose a narrower SQL
+lexical offset limit. `sign` is exactly `negative` or `positive`, corresponding
+to `QueryTemporalInfinity`; `withTimeZone` is a JSON Boolean. Infinity is not
+encoded as a numeric sentinel, primitive string or finite interval components.
+The value's declared column or parameter type remains separate: Kit's
+declared-type validator must reject an incompatible timestamp zone flag or
+temporal family.
+SQL arrays recursively use the same tagged values and preserve their element
+declaration, dimensions and NULL cells.
+
+Text rendering emits TIME as `HH:MM:SS.ffffff`, retaining the 24:00 endpoint.
+TIMETZ appends an east-positive signed offset as `+HH:MM:SS` or `-HH:MM:SS`;
+offset hours have at least two digits and expand for the full carrier range.
+The offset magnitude is computed after widening to Int64 so Int32.min cannot
+overflow. All six fractional digits are displayed without floating-point
+conversion. Temporal negative and positive infinity display as `-infinity`
+and `infinity`. Structured output carries the SQL family and zone meaning in
+its column declarations; table/CSV retain their existing non-round-trip guarantee.
+Finite primitive presentation and finite interval component presentation stay
+unchanged. Byte limits and typed failure mapping apply to every new branch.
+
+Interval modifiers are carried through the existing native
+[query descriptor JSON grammar](../database-kit/Sources/DatabaseSchemaJSON/DESIGN.md#s01-query-descriptor-json).
+`QueryColumnJSONCodec` continues delegating to Kit's `QueryColumnTypeJSONCodec`;
+the CLI introduces no descriptor parser or modifier policy. Kit owns the
+`interval` descriptor's `fields` and `precision` members, including allowed
+field ranges, precision validation, and their canonical JSON representation.
+
+| Implementation path | S06 owner and required evidence |
+|---|---|
+| `QueryValueJSONEncoder.valueNode`, `QueryValueJSONDecoder.decode` | CLI extends both closed dispatches and `QueryValueJSONTests`; exact tagged bytes round-trip every new case, both signs/zone flags, TIME endpoints, one-microsecond boundaries and full Int32 offsets. Existing primitive tags remain byte-for-byte identical. |
+| `QueryValueTextFormatter.format` | CLI extends its exhaustive QueryValue switch; tests assert endpoint/fraction/offset/infinity text and byte-limit failures, without SQL lexical parsing or timezone conversion. |
+| `WireRequestBuilder.parameters` | Existing decoded-value and declared-type validator path is preserved; tests reject family/zone mismatch and preserve typed NULL and interval-qualified empty SQL arrays. |
+| `QueryColumnJSONCodec`, JSON/JSONL column rendering | Kit owns descriptor codec changes; CLI tests verify modifier identity through parameters, columns and empty pages, including fields/precision. |
+| `ResultRenderer.rowJSON`, `tableValue`, `csvValue` | Existing delegation remains authoritative; `QueryRowRenderingTests` exercise positional temporal cells and duplicate labels in JSON/JSONL/table/CSV, checking exact cell values and output byte accounting. The CSV switch's existing default delegates new scalar cases to the formatter. |
+
+Malformed input coverage includes missing/duplicate/unknown members, invalid
+sign or Boolean, noncanonical and out-of-range integers, invalid TIME endpoints,
+and configured byte/depth limits. Typed temporal values cannot fall through to
+primitive-string conversion. Focused verification uses the package-owned
+`scripts/xcode-test-harness` before the standard and MultiBase consolidated
+lanes, with exact reviewed counts updated only alongside intentional tests.
+No S06 runtime success is claimed by this design document.

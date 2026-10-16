@@ -73,6 +73,25 @@ public struct QueryValueJSONDecoder: Sendable {
             }
             return .array(try QueryArrayValue(elementType: elementType, dimensions: dimensions,
                                               elements: elements, limits: limits))
+        case "sqlTime":
+            try object.validateKeys(["$type", "microseconds"])
+            return .time(try QueryTimeValue(microsecondsSinceMidnight: integer(object, "microseconds")))
+        case "sqlTimeWithTimeZone":
+            try object.validateKeys(["$type", "microseconds", "utcOffsetSeconds"])
+            return .timeWithTimeZone(QueryTimeWithTimeZoneValue(
+                time: try QueryTimeValue(microsecondsSinceMidnight: integer(object, "microseconds")),
+                utcOffsetSeconds: try integer(object, "utcOffsetSeconds")
+            ))
+        case "dateInfinity":
+            try object.validateKeys(["$type", "sign"])
+            return .dateInfinity(try infinity(object))
+        case "timestampInfinity":
+            try object.validateKeys(["$type", "sign", "withTimeZone"])
+            return .timestampInfinity(try infinity(object),
+                                      withTimeZone: try object.required("withTimeZone").bool(named: "withTimeZone"))
+        case "intervalInfinity":
+            try object.validateKeys(["$type", "sign"])
+            return .intervalInfinity(try infinity(object))
         case "interval":
             try object.validateKeys(["$type", "months", "days", "microseconds"])
             let months: Int32 = try integer(object, "months")
@@ -88,6 +107,14 @@ public struct QueryValueJSONDecoder: Sendable {
         default:
             return .primitive(try FieldValueJSONDecoder(maximumBytes: maximumBytes, maximumDepth: maximumDepth)
                 .decode(node, depth: depth))
+        }
+    }
+
+    private func infinity(_ object: StrictJSONObject) throws -> QueryTemporalInfinity {
+        switch try object.required("sign").string(named: "sign") {
+        case "negative": .negative
+        case "positive": .positive
+        default: throw DatabaseCLIError(.input, "Invalid temporal infinity sign")
         }
     }
 
