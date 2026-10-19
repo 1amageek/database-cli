@@ -1,13 +1,12 @@
 {
-  "originHash" : "6c4b883ca27c9d96478e1feccc548b81aa85863c2a120c63196ad1b5c56ea724",
+  "originHash" : "b9d38625f8e7704d9aef02900e3e48cd660a323c010c49b51ee88551bfde0698",
   "pins" : [
     {
       "identity" : "database-client",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/database-client.git",
       "state" : {
-        "revision" : "32d41d7594fbf20be39f6e538cc0a3c38645d7b9",
-        "version" : "26.904.0"
+        "revision" : "e97d6fc027dbc51d57032694087e3cc00fefffe5"
       }
     },
     {
@@ -15,8 +14,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/database-framework.git",
       "state" : {
-        "revision" : "5b82b8ba0a8582512ccb646c911739751249febe",
-        "version" : "26.905.0"
+        "revision" : "8b701a3ebca8fb8c170156e6a1642fb11a34ed7b"
       }
     },
     {
@@ -24,8 +22,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/database-kit.git",
       "state" : {
-        "revision" : "7492a39d5040bd83730a7cd84ed8de62b3f4741e",
-        "version" : "26.831.1"
+        "revision" : "62a6d6f42815e53512b17e61beae229f0f808638"
       }
     },
     {
@@ -33,8 +30,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/database-types.git",
       "state" : {
-        "revision" : "d075edcb37f8a7be845c5be4d6a7a226d899505b",
-        "version" : "26.831.0"
+        "revision" : "ef1938fd73c1663664eba04df5baa6d5c6b6a306"
       }
     },
     {
@@ -69,8 +65,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/storage-kit.git",
       "state" : {
-        "revision" : "2e00d3954829e4438693a9236a4927ac739b5f09",
-        "version" : "26.905.0"
+        "revision" : "aaf6906f7ec7facbb348b93246fbe88f91c3abcb"
       }
     },
     {
