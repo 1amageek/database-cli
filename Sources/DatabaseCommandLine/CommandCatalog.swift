@@ -559,6 +559,13 @@ private extension CommandCatalog {
         let readableTargetRequirement: [Set<String>] = []
         #endif
 
+        add(["sql", "execute"], 1...1, usage: "<statement|@path|@->", summary: "Execute one complete SQL request with ordered results.", options: remoteOptions(
+            specific: [.value("output", "jsonl|json", summary: "Select the complete SQL result format.", defaultValue: "jsonl")],
+            budget: true,
+            parameters: true,
+            baseTarget: true
+        ), capability: "sql.execute")
+
         for language in ["sql", "sparql"] {
             add(["query", language], 1...1, usage: "<statement|@path|@->", summary: "Execute a read-only \(language.uppercased()) statement.", options: remoteOptions(
                 outputFormats: "table|jsonl|json|csv|nquads",

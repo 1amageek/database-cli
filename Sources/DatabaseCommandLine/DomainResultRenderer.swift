@@ -995,6 +995,7 @@ private extension ResultRenderer {
         case .grantExecute: "grantExecute"
         #endif
         case .queryExecute: "queryExecute"
+        case .sqlExecute: "sqlExecute"
         case .mutationExecute: "mutationExecute"
         case .graphAlgorithm: "graphAlgorithm"
         case .ontologyExecute: "ontologyExecute"

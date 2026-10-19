@@ -181,6 +181,35 @@ is rejected by mutation commands. There is no long-lived server transaction.
 | `database schema plan <manifest>` | `schemaExecute.plan` | Strictly decodes the Schema JSON and returns current/target fingerprints, compatibility, and issues. Optional expected fingerprint detects drift. | Read-only; malformed manifests and fingerprint conflict fail. May use `--as-job`. |
 | `database schema apply <manifest>` | `schemaExecute.apply` | Requires expected fingerprint and idempotency key. The server either returns an accepted persistent job or the applied fingerprint/version/generation. | Mutating; conflict, incompatible change, unsupported index, or resource limit is never downgraded. May use `--as-job`. |
 
+## Complete SQL requests
+
+`database sql execute <statement|@path|@->` sends one complete SQL text request
+through `sql.execute`. Input and typed parameters are read once. The server
+parses and executes the entire request, then returns ordered outcomes only
+after authoritative commit or rollback and resource closure. SQL transaction
+controls, settings and prepared statements belong to that one request and do
+not survive into the next call.
+
+The command accepts connection options, request metadata, execution budgets,
+and typed parameters. In a `MultiBase` build it requires `--base`; a Composition
+is not an executable SQL block target. It supports `--output jsonl` (default)
+and `--output json`. The output retains separate ordered row sets, command
+counts and COPY bytes, following [TypedJSON.md](TypedJSON.md#complete-sql-results).
+An empty row set retains its column declarations.
+
+There is no `--page-size`, continuation, `--all` or `--as-job` option. The CLI
+never splits the SQL, infers query versus mutation intent, or replays a complete
+SQL request automatically. Existing `query sql` and `mutate sql` retain their
+operation contracts; query continuation preserves the original input and
+parameters rather than reading their files or standard input again.
+
+A failure prints canonical SQLSTATE, source position and available
+schema/table/column/constraint identifiers to stderr and returns the existing
+typed exit code. It prints no successful outcome events for a failed request.
+COPY takes or returns request-contained bytes; SQL cannot ask the CLI to open
+a host path or run a program. File notation selects the SQL request source.
+Shell command mode uses this same command and executor.
+
 ## Base lifecycle
 
 This family is available only when the server advertises `base.execute`, which

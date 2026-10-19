@@ -389,7 +389,7 @@ public struct ResultRenderer: Sendable {
         UInt64(try output.result(StrictJSONWriter.encode(node) + "\n"))
     }
 
-    private func rowJSON(
+    func rowJSON(
         _ row: QueryRow,
         provenance: StrictJSONValue?
     ) throws -> String {

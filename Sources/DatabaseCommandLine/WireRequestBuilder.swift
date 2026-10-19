@@ -22,7 +22,7 @@ struct WireRequestBuilder: Sendable {
         }
         if let root = command.path.first,
            [
-               "mutate", "entity", "graph", "ontology", "shacl",
+               "sql", "mutate", "entity", "graph", "ontology", "shacl",
                "migration", "index", "maintenance",
            ].contains(root) {
             return try dataTarget(command.options)
@@ -299,6 +299,17 @@ struct WireRequestBuilder: Sendable {
                 limit: execution.pageSize,
                 continuation: continuation
             ),
+            budget: execution.budget
+        )
+    }
+
+    func sqlRequest(
+        _ command: ParsedCommand,
+        execution: ExecutionOptions
+    ) throws -> SQLExecuteOperation.Request {
+        SQLExecuteOperation.Request(
+            input: .text(try input.read(command.positionals[0])),
+            parameters: try parameters(command.options),
             budget: execution.budget
         )
     }

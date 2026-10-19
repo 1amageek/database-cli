@@ -22,6 +22,7 @@ private let singleDatabaseCommandFixtures: [SingleDatabaseCommandFixture] = [
     .init(arguments: ["schema", "show", "Person"], path: ["schema", "show"]),
     .init(arguments: ["schema", "plan", schemaJSON], path: ["schema", "plan"]),
     .init(arguments: ["schema", "apply", schemaJSON, "--expected-fingerprint", emptyFingerprint, "--idempotency-key", "schema-1"], path: ["schema", "apply"]),
+    .init(arguments: ["sql", "execute", "SELECT 1"], path: ["sql", "execute"]),
     .init(arguments: ["query", "sql", "SELECT 1"], path: ["query", "sql"]),
     .init(arguments: ["query", "sparql", "SELECT * WHERE {}"], path: ["query", "sparql"]),
     .init(arguments: ["mutate", "sql", "DELETE FROM Person"], path: ["mutate", "sql"]),

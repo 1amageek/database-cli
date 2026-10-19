@@ -193,6 +193,20 @@ struct RemoteCommandExecutor: Sendable {
                     options: command.options
                 )
             )
+        case ["sql", "execute"]:
+            let sqlFormat = execution.outputFormat ?? .jsonl
+            guard sqlFormat == .json || sqlFormat == .jsonl else {
+                throw DatabaseCLIError(.input, "Complete SQL results require JSON or JSONL output")
+            }
+            try renderer.renderSQL(
+                try await targetedClient(command).execute(
+                    DatabaseOperationCatalog.sqlExecute,
+                    request: builder.sqlRequest(command, execution: execution),
+                    metadata: execution.metadata
+                ),
+                format: sqlFormat
+            )
+            continuationSink?(nil)
         case let path where path.count == 2 && path[0] == "query":
             try await executeQuery(
                 command,
@@ -415,17 +429,21 @@ private extension RemoteCommandExecutor {
 
         var continuation = execution.continuation
         var totals = PageTotals()
+        // A query continuation is bound to the page limit it was issued for, so
+        // every page keeps the first limit; PageTotals rejects rows past the quota.
+        let pageLimit = totals.executionPage(execution).pageSize
         repeat {
             if execution.pagination.fetchAll {
                 try totals.requirePageCapacity(execution.pagination)
             }
-            let pageExecution = totals.executionPage(execution)
             let response = try await targetedClient(command).execute(
                 DatabaseOperationCatalog.queryExecute,
-                request: try builder.queryRequest(
-                    command,
-                    execution: pageExecution,
-                    continuation: continuation
+                request: QueryExecuteOperation.Request(
+                    input: firstRequest.input,
+                    parameters: firstRequest.parameters,
+                    graphPartitions: firstRequest.graphPartitions,
+                    page: .init(limit: pageLimit, continuation: continuation),
+                    budget: firstRequest.budget
                 ),
                 metadata: execution.metadata
             )
@@ -863,11 +881,11 @@ private extension RemoteCommandExecutor {
                 format: format
             )
         #if DATABASE_CLI_MULTI_BASE
-        case .capabilitiesDescribe, .schemaDescribe, .compositionExecute,
+        case .capabilitiesDescribe, .schemaDescribe, .sqlExecute, .compositionExecute,
              .grantExecute, .jobStart, .jobStatus, .jobResult, .jobCancel:
             throw DatabaseCLIError(.input, "Operation family does not support jobs")
         #else
-        case .capabilitiesDescribe, .schemaDescribe, .jobStart, .jobStatus,
+        case .capabilitiesDescribe, .schemaDescribe, .sqlExecute, .jobStart, .jobStatus,
              .jobResult, .jobCancel:
             throw DatabaseCLIError(.input, "Operation family does not support jobs")
         #endif
@@ -924,6 +942,7 @@ private extension RemoteCommandExecutor {
         case .grantExecute: "grantExecute"
         #endif
         case .queryExecute: "queryExecute"
+        case .sqlExecute: "sqlExecute"
         case .mutationExecute: "mutationExecute"
         case .graphAlgorithm: "graphAlgorithm"
         case .ontologyExecute: "ontologyExecute"

@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+"""Verify complete SQL through the public authenticated native process path."""
+
+import base64
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+
+
+EXPECTED_CHECKS = 14
+BLOCK = """BEGIN;
+CREATE TABLE s17_items (id integer PRIMARY KEY, label text);
+INSERT INTO s17_items VALUES (1, $1), (2, 'second'), (3, 'third') RETURNING id, label;
+COPY (SELECT id, label FROM s17_items ORDER BY id) TO STDOUT WITH (FORMAT CSV, HEADER);
+SELECT id, label FROM s17_items ORDER BY id;
+COMMIT;
+"""
+UNICODE_ERROR = "SELECT '猫';\r\nSELECT missing_column"
+COLUMNS = [
+    {"number": str(index), "name": "same", "type": {"kind": "sql", "type": {"kind": kind}}, "isNullable": True}
+    for index, kind in enumerate(["integer", "bigint"], 1)
+]
+
+
+def require(condition, message):
+    if not condition:
+        raise AssertionError(message)
+
+
+def digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def diagnostic(stdout, stderr, state, **fields):
+    require(stdout == b"", "failed SQL emitted success output")
+    text = stderr.decode("utf-8")
+    require(text.startswith("error: ") and text.endswith("\n") and text.count("\n") == 1,
+            "SQL diagnostic is not one structured stderr record")
+    value = json.loads(text[7:])
+    require(value["sqlState"] == state and isinstance(value["message"], str) and value["message"],
+            "wrong SQLSTATE or missing message")
+    for key, expected in fields.items():
+        require(value.get(key) == expected, "wrong SQL diagnostic " + key)
+    return value
+
+
+def typed_rows(result, expected):
+    require(result["kind"] == "rows" and result["rowCount"] == str(len(expected)), "wrong row outcome")
+    require([row["values"] for row in result["rows"]] == expected, "lossy or unordered SQL rows")
+    require(all(row["$type"] == "row" for row in result["rows"]), "wrong row tag")
+
+
+def metadata(results, empty):
+    require(len(results) == 1, "wrong metadata result count")
+    result = results[0]
+    require(result["index"] == "1" and result["columns"] == COLUMNS and result["affectedRows"] is None,
+            "typed empty or duplicate-column metadata changed")
+    typed_rows(result, [] if empty else [[{"$type": "null"}, {"$type": "null"}]])
+
+
+def query_pages(pages):
+    require(len(pages) == 2 and [len(page["rows"]) for page in pages] == [2, 1], "wrong query page boundaries")
+    require(isinstance(pages[0]["$continuation"], str) and pages[0]["$continuation"]
+            and pages[1]["$continuation"] is None, "query continuation lifecycle changed")
+    require(pages[0]["columns"] == pages[1]["columns"], "query page metadata changed")
+    rows = [row for page in pages for row in page["rows"]]
+    require(all(row["$type"] == "row" for row in rows), "wrong query row tag")
+    require([row["values"] for row in rows] == [[{"$type": "int32", "value": str(i)}] for i in [1, 2, 3]],
+            "parameterized query paging changed ordered rows")
+
+
+def query_argv(specification, profile, parameters):
+    row_count = 3
+    page_size = 2
+    return ["query", "sql", specification, "--profile", profile, "--parameters", "@" + str(parameters),
+            "--page-size", str(page_size), "--all", "--max-pages", str((row_count + page_size - 1) // page_size),
+            "--max-total-rows", str(row_count), "--max-total-bytes", str(64 * 1024), "--output", "json"]
+
+
+def self_test():
+    valid = {"index": "1", "kind": "rows", "columns": COLUMNS, "rowCount": "0", "affectedRows": None, "rows": []}
+    metadata([valid], True)
+    damaged = dict(valid, columns=list(reversed(COLUMNS)))
+    try:
+        metadata([damaged], True)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("metadata oracle accepted reordered columns")
+    diagnostic(b"", b'error: {"sqlState":"42703","message":"missing","position":"21"}\n', "42703", position="21")
+    try:
+        diagnostic(b"partial success\n", b'error: {"sqlState":"42703","message":"missing"}\n', "42703")
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("diagnostic oracle accepted partial success")
+    require(UNICODE_ERROR.index("missing_column") + 1 == 21, "source fixture scalar position changed")
+    pages = [{"columns": [], "$continuation": "next", "rows": [{"$type": "row", "values": [{"$type": "int32", "value": str(i)}]} for i in [1, 2]]},
+             {"columns": [], "$continuation": None, "rows": [{"$type": "row", "values": [{"$type": "int32", "value": "3"}]}]}]
+    query_pages(pages)
+    pages[0]["$continuation"] = None
+    try:
+        query_pages(pages)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("paging oracle accepted missing continuation")
+
+    def check_paging_argv(arguments):
+        require(arguments[:2] == ["query", "sql"] and "--all" in arguments, "wrong paging command")
+        for option, value in [("--page-size", "2"), ("--max-pages", "2"),
+                              ("--max-total-rows", "3"), ("--max-total-bytes", "65536")]:
+            require(arguments.count(option) == 1 and arguments[arguments.index(option) + 1] == value,
+                    "missing or incorrect paging quota " + option)
+
+    for specification in ["SELECT id FROM s17_items ORDER BY id", "@-"]:
+        arguments = query_argv(specification, "self-check-profile", Path("/self-check/parameters.json"))
+        check_paging_argv(arguments)
+        require(arguments[2] == specification and arguments[arguments.index("--parameters") + 1]
+                == "@/self-check/parameters.json", "paging command lost its input")
+        for option in ["--max-pages", "--max-total-rows", "--max-total-bytes"]:
+            damaged = list(arguments)
+            offset = damaged.index(option)
+            del damaged[offset:offset + 2]
+            try:
+                check_paging_argv(damaged)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError("paging argv oracle accepted missing " + option)
+    print("Paging argv self-check passed: inline/stdin include all 3 quotas; 6 missing-quota mutations rejected")
+    print("SQL process harness oracle self-check passed; no service started")
+
+
+class Harness:
+    def __init__(self):
+        self.results = Path(os.environ["DATABASE_SQL_PROCESS_RESULT_DIRECTORY"]).resolve()
+        self.results.mkdir(parents=True, mode=0o700, exist_ok=False)
+        self.work = Path(tempfile.mkdtemp(prefix="database-cli-sql-process-"))
+        self.env = dict(os.environ, DATABASE_CLI_CONFIG_HOME=str(self.work / "config"))
+        self.env.pop("DATABASE_ACCESS_TOKEN", None)
+        self.profile = "s17-sql-" + self.work.name.rsplit("-", 1)[-1]
+        self.process = None
+        self.generation = 0
+        self.checks = []
+        self.receipt = {"status": "running", "expectedChecks": EXPECTED_CHECKS, "checks": self.checks,
+                        "passed": 0, "failed": 0, "skipped": 0, "expectedFailures": 0, "runtimeWarnings": 0}
+        self.database = self.work / "install" / "database"
+        self.server = self.database.with_name("database-server")
+        self.configuration = self.work / "config" / "servers" / self.profile / "server.json"
+        self.sqlite = self.work / "data" / "database.sqlite"
+
+    def write_receipt(self):
+        self.receipt["passed"] = len(self.checks)
+        (self.results / "receipt.json").write_text(json.dumps(self.receipt, indent=2) + "\n")
+
+    def check(self, name):
+        self.checks.append(name)
+        self.write_receipt()
+        print(name + "=passed", flush=True)
+
+    def run(self, name, arguments, *, data=None, expected=0, timeout=45, env=None, diagnostics=False):
+        result = subprocess.run([str(self.database), *arguments], input=data, capture_output=True,
+                                env=env or self.env, timeout=timeout)
+        (self.results / (name + ".stdout")).write_bytes(result.stdout)
+        (self.results / (name + ".stderr")).write_bytes(result.stderr)
+        (self.results / (name + ".status")).write_text(str(result.returncode) + "\n")
+        require(result.returncode == expected, name + ": unexpected exit " + str(result.returncode))
+        if expected == 0 and not diagnostics:
+            require(result.stderr == b"", name + ": unexpected stderr")
+        return result
+
+    def sql(self, name, text, *, output=None, parameters=None, data=None, expected=0):
+        args = ["sql", "execute", text, "--profile", self.profile]
+        if output:
+            args += ["--output", output]
+        if parameters:
+            args += ["--parameters", "@" + str(parameters)]
+        return self.run(name, args, data=data, expected=expected)
+
+    def private_server_pids(self):
+        lines = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=5).stdout.splitlines()
+        return [int(parts[0]) for line in lines if len(parts := line.strip().split(None, 1)) == 2
+                and (parts[1] == str(self.server) or parts[1].startswith(str(self.server) + " "))]
+
+    def start(self):
+        self.generation += 1
+        out = open(self.results / ("serve-" + str(self.generation) + ".stdout"), "wb")
+        err = open(self.results / ("serve-" + str(self.generation) + ".stderr"), "wb")
+        try:
+            self.process = subprocess.Popen([str(self.database), "serve", "--config", str(self.configuration),
+                                             "--profile", self.profile, "--listen", self.endpoint],
+                                            stdout=out, stderr=err, env=self.env)
+        finally:
+            out.close()
+            err.close()
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and self.process.poll() is None:
+            result = subprocess.run([str(self.database), "capabilities", "--profile", self.profile],
+                                    capture_output=True, env=self.env, timeout=3)
+            if result.returncode == 0:
+                require(result.stderr == b"", "readiness stderr")
+                (self.results / ("readiness-" + str(self.generation) + ".stdout")).write_bytes(result.stdout)
+                require(b'"identifier":"schema.execute","version":"1"' in result.stdout, "wrong protocol readiness")
+                return
+            time.sleep(.05)
+        raise AssertionError("authenticated readiness failed")
+
+    def stop(self):
+        require(self.process is not None, "no owned serve process")
+        self.process.send_signal(signal.SIGINT)
+        status = self.process.wait(timeout=30)
+        self.process = None
+        require(status == 130, "serve SIGINT did not report cancellation")
+        require(not self.private_server_pids(), "private server survived SIGINT")
+        self.run("negative-readiness-" + str(self.generation), ["capabilities", "--profile", self.profile], expected=8, timeout=5)
+        self.receipt["authoritativeShutdowns"] = self.generation
+        self.write_receipt()
+
+    def prepare(self):
+        install = self.database.parent
+        install.mkdir()
+        provenance = {}
+        for variable, name in [("DATABASE_CLI_EXECUTABLE", "database"), ("DATABASE_FDB_EXECUTABLE", "database-fdb"),
+                               ("DATABASE_SERVER_EXECUTABLE", "database-server")]:
+            source = Path(os.environ[variable]).resolve(strict=True)
+            require(os.access(source, os.X_OK), variable + " is not executable")
+            shutil.copy2(source, install / name)
+            provenance[name] = {"source": str(source), "sha256": digest(source)}
+        versions = []
+        for name in provenance:
+            result = subprocess.run([str(install / name), "--version"], capture_output=True, env=self.env, timeout=10)
+            require(result.returncode == 0 and not result.stderr, "version check failed: " + name)
+            versions.append(result.stdout.decode().strip())
+        require(len(set(versions)) == 1 and re.fullmatch(r"\d+\.\d+\.\d+", versions[0]), "adjacent product version mismatch")
+        self.receipt["executables"] = provenance
+        self.receipt["version"] = versions[0]
+        self.receipt["harnessSHA256"] = digest(__file__)
+        libraries = subprocess.run(["otool", "-L", str(self.database)], capture_output=True, text=True, timeout=10)
+        require(libraries.returncode == 0 and "libfdb_c" not in libraries.stdout, "main CLI links storage backend")
+        (self.results / "database-linkage.txt").write_text(libraries.stdout)
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        self.endpoint = "127.0.0.1:" + str(port)
+        self.configuration.parent.mkdir(parents=True, mode=0o700)
+        (self.work / "config").chmod(0o700)
+        (self.work / "config" / "servers").chmod(0o700)
+        self.sqlite.parent.mkdir(mode=0o700)
+        configuration = {"formatVersion": 3, "storage": {"kind": "sqlite", "sqlite": {"mode": "file", "path": str(self.sqlite)}},
+                         "databaseRoot": {"kind": "engine"}, "host": "127.0.0.1", "port": port,
+                         "routing": {"databaseID": "main"}, "tokenRegistryPath": str(self.configuration.with_name("tokens.json")),
+                         "sqlTablePolicies": [{"schema": "public", "table": "s17_items", "roles": {
+                             "list": ["admin"], "get": ["admin"], "create": ["admin"],
+                             "update": ["admin"], "delete": ["admin"]}}]}
+        self.configuration.write_text(json.dumps(configuration))
+        self.configuration.chmod(0o600)
+        self.check("adjacent-version-and-link-separation")
+
+    def execute(self):
+        self.prepare()
+        self.start()
+        self.check("authenticated-real-transport-readiness")
+        parameters = self.results / "parameters.json"
+        parameters.write_text(json.dumps([{"position": "1", "value": {"$type": "string", "value": "日本語😀"}}]))
+        block_path = self.results / "complete.sql"
+        block_path.write_text(BLOCK)
+        result = self.sql("complete", "@" + str(block_path), parameters=parameters)
+        outcomes = [json.loads(line) for line in result.stdout.splitlines()]
+        require([value["index"] for value in outcomes] == list(map(str, range(1, 7))), "ordered result index changed")
+        require([value["kind"] for value in outcomes] == ["command", "command", "rows", "copy", "rows", "command"], "block outcomes changed")
+        require([outcomes[i]["command"] for i in [0, 1, 5]] == ["begin", "createTable", "commit"], "command outcomes changed")
+        require(all(outcomes[i]["affectedRows"] is None for i in [0, 1, 5]), "command affected count changed")
+        rows = [[{"$type": "int32", "value": "1"}, {"$type": "string", "value": "日本語😀"}],
+                [{"$type": "int32", "value": "2"}, {"$type": "string", "value": "second"}],
+                [{"$type": "int32", "value": "3"}, {"$type": "string", "value": "third"}]]
+        typed_rows(outcomes[2], rows)
+        require(outcomes[2]["affectedRows"] == "3", "RETURNING affected count changed")
+        typed_rows(outcomes[4], rows)
+        copy = outcomes[3]
+        require(copy["affectedRows"] == "3" and copy["bytes"]["$type"] == "bytes", "COPY metadata changed")
+        encoded = copy["bytes"]["value"]
+        require(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)) == "id,label\n1,日本語😀\n2,second\n3,third\n".encode(), "COPY bytes changed")
+        self.check("sql-file-ddl-dml-returning-copy-select-commit")
+        self.stop()
+        require(self.sqlite.is_file() and self.sqlite.stat().st_size > 0, "no file-backed SQLite state")
+        self.start()
+        readback = self.sql("persisted-readback", "SELECT id, label FROM s17_items ORDER BY id", output="json")
+        typed_rows(json.loads(readback.stdout)[0], rows)
+        self.check("restart-file-backed-sql-readback")
+        websocket = "ws://" + self.endpoint + "/v1/database"
+        result = self.run("websocket-readback", ["sql", "execute", "SELECT id, label FROM s17_items ORDER BY id",
+                                                 "--profile", self.profile, "--endpoint", websocket, "--output", "json"])
+        typed_rows(json.loads(result.stdout)[0], rows)
+        failure = self.run("websocket-diagnostic", ["sql", "execute", "SELECT missing_column FROM s17_items",
+                                                    "--profile", self.profile, "--endpoint", websocket], expected=2)
+        diagnostic(failure.stdout, failure.stderr, "42703", column="missing_column")
+        self.check("websocket-transport-readback-and-diagnostic")
+        failure = self.sql("late-error", "CREATE TABLE s17_rolled_back (id integer); INSERT INTO s17_items VALUES (4, 'uncommitted'); INSERT INTO s17_items VALUES (1, 'duplicate')", expected=6)
+        diagnostic(failure.stdout, failure.stderr, "23505", table="s17_items")
+        typed_rows(json.loads(self.sql("rollback-readback", "SELECT id, label FROM s17_items ORDER BY id", output="json").stdout)[0], rows)
+        self.check("late-error-data-rollback")
+        result = self.sql("rollback-schema-readback", "SELECT table_name FROM information_schema.tables WHERE table_name = 's17_rolled_back'", output="json")
+        typed_rows(json.loads(result.stdout)[0], [])
+        self.check("late-error-ddl-rollback")
+        unicode_path = self.results / "unicode-crlf.sql"
+        unicode_path.write_bytes(UNICODE_ERROR.encode())
+        result = self.sql("unicode-crlf", "@" + str(unicode_path), expected=2)
+        diagnostic(result.stdout, result.stderr, "42703", position="21", column="missing_column")
+        self.check("unicode-crlf-typed-diagnostic")
+        typed_parameters = self.results / "typed-parameters.json"
+        typed_parameters.write_text(json.dumps([{"position": str(i), "value": {"$type": "null"}, "type": column["type"]} for i, column in enumerate(COLUMNS, 1)]))
+        statement = "SELECT $1 AS same, $2 AS same"
+        metadata(json.loads(self.sql("typed-empty", statement + " WHERE FALSE", output="json", parameters=typed_parameters).stdout), True)
+        metadata([json.loads(line) for line in self.sql("typed-duplicate", statement, parameters=typed_parameters).stdout.splitlines()], False)
+        self.check("typed-empty-and-duplicate-columns-json-jsonl")
+        result = self.sql("stdin-sql", "@-", data=b"SELECT id, label FROM s17_items ORDER BY id", output="json")
+        typed_rows(json.loads(result.stdout)[0], rows)
+        self.check("sql-stdin-consumed-once")
+        paging_parameters = self.results / "paging-parameters.json"
+        paging_parameters.write_text(json.dumps([{"position": "1", "value": {"$type": "int32", "value": "1"}}]))
+        query = "SELECT id FROM s17_items WHERE id >= $1 ORDER BY id"
+        result = self.run("query-all", query_argv(query, self.profile, paging_parameters))
+        query_pages(json.loads(result.stdout))
+        self.check("existing-query-parameterized-paging")
+        result = self.run("stdin-query-all", query_argv("@-", self.profile, paging_parameters), data=query.encode())
+        query_pages(json.loads(result.stdout))
+        self.check("existing-query-stdin-all-consumed-once")
+        self.stop()
+        warnings = []
+        for path in self.results.glob("serve-*.stderr"):
+            warnings.extend(line for line in path.read_text().splitlines()
+                            if re.search(r"warning:|\[warning\]|\[error\]|runtime warning|Swift runtime failure", line, re.I))
+        self.receipt["runtimeWarnings"] = len(warnings)
+        require(not warnings, "server emitted runtime warnings or errors")
+        self.check("sigint-authoritative-stop-and-negative-readiness")
+        # The private stdio stream has no launch configuration, so table access is
+        # denied by policy (42501) while the same file still resolves the table.
+        shell = ('\\mode command\n'
+                 'sql execute "SELECT 1 AS one" --output json\n'
+                 'sql execute "SELECT id FROM s17_items" --output json\n').encode()
+        result = self.run("stdio-open", ["open", str(self.sqlite)], data=shell, timeout=60, diagnostics=True)
+        local = json.loads(result.stdout)
+        require(len(local) == 1 and local[0]["kind"] == "rows" and local[0]["rowCount"] == "1",
+                "stdio SQL lost its ordered rows")
+        require(local[0]["rows"][0]["values"] == [{"$type": "int32", "value": "1"}], "stdio SQL value changed")
+        # The interactive shell writes each diagnostic after its prompt on stderr.
+        denied = [json.loads(match) for match in re.findall(r"error: (\{.*\})", result.stderr.decode("utf-8"))]
+        require(len(denied) == 1 and denied[0]["sqlState"] == "42501", "stdio table access was not policy-denied")
+        require(not self.private_server_pids(), "stdio server survived shell EOF")
+        self.check("stdio-framed-local-sql-and-default-deny")
+        require(len(self.checks) == EXPECTED_CHECKS, "wrong exact process check count")
+
+    def cleanup(self):
+        emergency_cleanup = False
+        if self.process and self.process.poll() is None:
+            try:
+                self.stop()
+            except BaseException:
+                emergency_cleanup = True
+                if self.process and self.process.poll() is None:
+                    self.process.terminate()
+                    try:
+                        self.process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        self.process.kill()
+                        self.process.wait(timeout=5)
+        for pid in self.private_server_pids():
+            emergency_cleanup = True
+            os.kill(pid, signal.SIGTERM)
+        deadline = time.monotonic() + 5
+        while self.private_server_pids() and time.monotonic() < deadline:
+            time.sleep(.05)
+        for pid in self.private_server_pids():
+            os.kill(pid, signal.SIGKILL)
+        deadline = time.monotonic() + 5
+        while self.private_server_pids() and time.monotonic() < deadline:
+            time.sleep(.05)
+        require(not self.private_server_pids(), "private server remains at cleanup")
+        if self.configuration.exists():
+            self.run("cleanup-negative-readiness", ["capabilities", "--profile", self.profile], expected=8, timeout=5)
+            self.run("auth-logout", ["auth", "logout", "--profile", self.profile], timeout=10)
+            self.run("profile-remove", ["profile", "remove", self.profile], timeout=10)
+        require(self.work.parent == Path(tempfile.gettempdir()) and self.work.name.startswith("database-cli-sql-process-"), "unexpected cleanup path")
+        shutil.rmtree(self.work)
+        require(not self.work.exists(), "isolated state survived cleanup")
+        self.receipt["isolatedStateRemoved"] = True
+        require(not emergency_cleanup, "failure cleanup required forced process termination")
+
+
+def main():
+    if sys.argv[1:] == ["--self-test"]:
+        self_test()
+        return
+    require(not sys.argv[1:], "use executable and result-directory environment inputs")
+    def terminate(_signal, _frame):
+        raise SystemExit(143)
+    signal.signal(signal.SIGTERM, terminate)
+    harness = Harness()
+    try:
+        harness.execute()
+        harness.cleanup()
+        harness.receipt["status"] = "passed"
+    except BaseException as error:
+        harness.receipt.update(status="failed", failed=1, failure=str(error))
+        try:
+            harness.cleanup()
+        except BaseException as cleanup_error:
+            harness.receipt["cleanupFailure"] = str(cleanup_error)
+        raise
+    finally:
+        harness.write_receipt()
+    print("SQL public process verification passed: " + str(harness.results / "receipt.json"))
+
+
+if __name__ == "__main__":
+    main()

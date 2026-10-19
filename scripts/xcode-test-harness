@@ -235,8 +235,8 @@ summary_number() {
 }
 
 case "$TEST_TRAITS" in
-  "") default_expected_test_count=79 ;;
-  "MultiBase") default_expected_test_count=92 ;;
+  "") default_expected_test_count=88 ;;
+  "MultiBase") default_expected_test_count=101 ;;
   *)
     echo "error: DATABASE_CLI_TEST_TRAITS must be empty or MultiBase" >&2
     exit 2

@@ -310,25 +310,10 @@ renderer unit fixtures alone are insufficient. Existing process/xcode harness
 owners and the backend-free main executable remain unchanged. The workspace
 progress record owns the real process evidence for these implemented S01 paths.
 
-S17 adds statement and SQL-file/block invocation through DatabaseClient, using
-the [SQL semantic profile](../database-kit/Sources/DatabaseKit/Query/SQL/DESIGN.md).
-SQL text is sent intact; server/Framework owns grammar, binding, execution, and
-transaction state. The CLI must not acquire a Framework or storage dependency
-for parsing or execution. Existing explicit query/mutation commands retain
-their operation contracts.
-
-Output preserves statement order, affected-row counts, column ordinals/types,
-duplicate labels, empty-result schemas, typed NULL, and lossless rich values.
-Structured SQL output uses column declarations and positional row arrays,
-never an object keyed only by potentially duplicate labels. SQLSTATE and
-commit-unknown remain observable through stderr and the existing typed exit
-contract. A pending schema job is not reported as completed SQL DDL.
-
-The command and typed JSON authorities own the concrete syntax and rendering
-changes when S17 begins. Process verification covers real SQL-file execution,
-stdout/stderr, rollback readback, cancellation, and authoritative child stop;
-Wire-mapping tests alone do not prove execution. User profile/credential and
-main-executable link-separation contracts remain unchanged.
+The [S17 complete invocation contract](#s17-complete-sql-invocation) owns
+statement/block invocation, SQL-file input and diagnostic presentation. The
+existing query/mutation and retained-value contracts above remain its consumed
+assumptions.
 
 ## S06 Temporal Boundary
 
@@ -411,3 +396,74 @@ primitive-string conversion. Focused verification uses the package-owned
 `scripts/xcode-test-harness` before the standard and MultiBase consolidated
 lanes, with exact reviewed counts updated only alongside intentional tests.
 No S06 runtime success is claimed by this design document.
+
+## S17 Complete SQL Invocation
+
+`database sql execute <statement|@path|@->` invokes
+`DatabaseOperationCatalog.sqlExecute` through the existing authenticated
+session. There is no existing `sql` command family to supersede. The command
+consumes one bounded UTF-8 SQL input, canonical typed parameters, one execution
+budget and existing request metadata. It constructs
+`SQLExecuteOperation.Request(input: .text(...), parameters: ..., budget: ...)`.
+Kit owns that declaration and the bounded codec; Framework owns parsing,
+authority and single-request SQL execution.
+
+```text
+one inline / file / stdin read + one parameter decode
+    -> immutable SQL request -> generic DatabaseSessionClient.execute
+        -> one complete correlated post-closure response
+            -> ordered statement events -> stdout
+        -> canonical typed SQL diagnostic -> stderr and existing exit class
+```
+
+The command has no continuation, page size, `--all` or `--as-job` surface and
+never splits SQL or automatically replays the request. Standard calls remain
+target-free. The non-default `MultiBase` graph requires one `--base` and rejects
+a Composition target, since a complete block may write. SQL settings,
+transactions and prepared names end at request close. Shell command mode uses
+the same catalog, parser and executor; no implicit statement-mode guessing or
+cross-request SQL state is introduced.
+
+The complete response renders as JSONL by default, with optional JSON output.
+Statement indices preserve input order and distinguish multiple result sets.
+Rows use existing ordered column descriptors and positional tagged QueryValue
+cells, including zero-row metadata and duplicate labels. Command outcomes retain
+SQL command kind and an optional canonical decimal affected-row count. COPY
+outcomes retain affected rows and exact bytes using the existing tagged bytes
+and unpadded base64url representation. The renderer emits one result at a time
+from the response's retained owners. It neither interprets COPY content nor
+opens host files named by SQL; SQL file notation only selects the request input.
+
+Typed remote SQL diagnostics retain SQLSTATE, one-based source character
+position and schema/table/column/constraint identifiers in stderr. They use
+Kit's upcoming `RemoteOperationError` typed diagnostic accessor rather than
+message matching or independently interpreting generic details. Existing
+category-to-exit-code mapping remains authoritative. Failed blocks emit no
+successful outcome events. Authentication, cancellation, resource limits and
+malformed responses preserve their existing failure and shutdown paths.
+
+Existing `query sql` and `mutate sql` commands and their pagination contracts
+remain supported. `RemoteCommandExecutor.executeQuery` must read SQL and
+structured parameter files/stdin once into the first owned request; successive
+pages replace only the page limit and detached continuation. It must not
+consume stdin into an unused preliminary request or reread mutable files while
+paging. Existing page quotas, repeated-continuation rejection, positional row
+rendering and retained owner release remain in force.
+
+| Invariant | S17 falsifiable evidence owner |
+|---|---|
+| Command/catalog mapping and options are exact in both graphs | Parser, catalog and operation-mapping tests accept inline/file/stdin SQL and typed parameters; reject page/job/Composition options for complete SQL. |
+| Complete ordered outcomes preserve identity | Renderer tests cover multiple/empty row sets, duplicate labels, typed NULL/rich values, command counts and COPY bytes with exact JSON/JSONL event order. |
+| Failure diagnostics remain separate from results | Application tests assert all typed diagnostic members on stderr, stable exit codes and no outcome stdout on operation failure. |
+| SQL and parameter input are read only once | Focused execution tests cover stdin and file input, then mutate/remove the source before a continuation and verify the original SQL/parameter identity. |
+| Real public execution reaches a backend | Process harness sends SQL files and blocks through adjacent authenticated server transport, checks backend readback and late failure rollback, and verifies authoritative shutdown. |
+| Main executable keeps its link boundary | Existing process/link checks prove that `database` does not link a storage backend or FoundationDB. |
+
+`SQLExecutionTests` gives each executor invocation its own output handles through
+`withSQLOutput`. The helper owns unique temporary output files, retains their
+handles until the invocation finishes, and closes them before removing the
+directory. Parallel tests do not share a global null-device output sink.
+
+Client/runtime platform evidence retains its owning package; CLI does not
+duplicate the Framework semantic corpus. Exact test counts change only in the
+executable harness configuration alongside intentional behavioral coverage.

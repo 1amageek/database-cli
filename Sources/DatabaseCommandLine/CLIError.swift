@@ -134,6 +134,24 @@ extension DatabaseCLIError {
         case .internalFailure:
             code = .internalFailure
         }
+        do {
+            if let diagnostic = try error.sqlDiagnostic() {
+                var fields: [(key: String, value: StrictJSONValue)] = [
+                    ("sqlState", .string(diagnostic.sqlState)),
+                    ("message", .string(diagnostic.message)),
+                ]
+                if let position = diagnostic.position { fields.append(("position", .string(String(position)))) }
+                for (name, value) in [
+                    ("schema", diagnostic.schema), ("table", diagnostic.table),
+                    ("column", diagnostic.column), ("constraint", diagnostic.constraint),
+                ] {
+                    if let value { fields.append((name, .string(value))) }
+                }
+                return Self(code, StrictJSONWriter.encode(.object(fields)))
+            }
+        } catch {
+            return Self(.internalFailure, "Invalid remote SQL diagnostic: \(error)")
+        }
         return Self(code, "\(error.code): \(error.message)")
     }
 }

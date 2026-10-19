@@ -48,6 +48,7 @@ private let commandFixtures: [CommandFixture] = [
     .init(arguments: ["grant", "effective", "--base", baseID], path: ["grant", "effective"]),
     .init(arguments: ["grant", "add", "--base", baseID, "--principal", "alice", "--access", "read,write", "--expected-revision", "0", "--idempotency-key", "grant-add"], path: ["grant", "add"]),
     .init(arguments: ["grant", "revoke", "--base", baseID, "--principal", "alice", "--access", "write", "--expected-revision", "1", "--idempotency-key", "grant-revoke"], path: ["grant", "revoke"]),
+    .init(arguments: ["sql", "execute", "SELECT 1", "--base", baseID], path: ["sql", "execute"]),
     .init(arguments: ["query", "sql", "SELECT 1", "--base", baseID], path: ["query", "sql"]),
     .init(arguments: ["query", "sparql", "SELECT * WHERE {}", "--composition", compositionID], path: ["query", "sparql"]),
     .init(arguments: ["mutate", "sql", "DELETE FROM Person", "--base", baseID], path: ["mutate", "sql"]),

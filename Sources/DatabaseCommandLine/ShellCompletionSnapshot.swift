@@ -63,8 +63,9 @@ struct ShellCompletionSnapshot: Sendable, Hashable {
                     )
                 )
             }
-            if command.option(named: "output") != nil {
-                for format in ["table", "jsonl", "json", "csv", "nquads"] {
+            if let option = command.option(named: "output"),
+               case .value(let formats) = option.valueMode {
+                for format in formats.split(separator: "|").map(String.init) {
                     result.insert(
                         ShellCompletionEntry(
                             context: commandContext + "--output ",
