@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Verifies configured entity policies through the standalone server process.
+# The launch document grants the profile's admin role list, get, and create on
+# EntityPolicySample only. This script republishes the schema with that entity,
+# inserts a 1000-record sample in one atomic change, reads every record back,
+# and requires the unconfigured update and delete operations to be denied
+# through both SQL and the entity operation path without changing the sample.
+
+DATABASE="$1"
+PROFILE="$2"
+RESULT_DIRECTORY="$3"
+SAMPLE_COUNT=1000
+mkdir -p "$RESULT_DIRECTORY"
+
+cat >"$RESULT_DIRECTORY/schema.json" <<'JSON'
+{
+  "formatVersion":3,
+  "schemaVersion":{"major":2,"minor":1,"patch":0},
+  "entities":[{
+    "name":"S01QueryPageFixture",
+    "identifierType":{"kind":"string"},
+    "fields":[{"name":"id","number":1,"type":"string","optional":false,"array":false,"referenceTargetEntity":null,"queryType":null,"defaultValue":null}],
+    "directory":{"components":[{"kind":"static","value":"s01-query-page-fixture"}],"layer":"default"},
+    "indexes":[],"relationships":[],"fieldAccessRules":[],"enumMetadata":{},"ontology":null,"polymorphicMembership":null
+  },{
+    "name":"EntityPolicySample",
+    "identifierType":{"kind":"string"},
+    "fields":[
+      {"name":"id","number":1,"type":"string","optional":false,"array":false,"referenceTargetEntity":null,"queryType":null,"defaultValue":null},
+      {"name":"title","number":2,"type":"string","optional":false,"array":false,"referenceTargetEntity":null,"queryType":null,"defaultValue":null}
+    ],
+    "directory":{"components":[{"kind":"static","value":"entity-policy-sample"}],"layer":"default"},
+    "indexes":[],"relationships":[],"fieldAccessRules":[],"enumMetadata":{},"ontology":null,"polymorphicMembership":null
+  }]
+}
+JSON
+ruby -rjson - "$RESULT_DIRECTORY/entities.json" "$SAMPLE_COUNT" <<'RUBY'
+path, count = ARGV[0], Integer(ARGV[1])
+changes = (1..count).map do |index|
+  id = format("sample-%04d", index)
+  {
+    "kind" => "insert",
+    "identity" => {"$type" => "reference", "entity" => "EntityPolicySample",
+                   "id" => {"kind" => "string", "value" => id},
+                   "partitions" => {"$type" => "object", "value" => {}}},
+    "fields" => {"$type" => "object", "value" => {
+      "id" => {"$type" => "string", "value" => id},
+      "title" => {"$type" => "string", "value" => "title-#{id}"}
+    }}
+  }
+end
+File.write(path, JSON.generate({"changes" => changes}))
+RUBY
+
+setup() {
+  local name="$1"
+  shift
+  perl -e 'alarm shift; exec @ARGV' 60 \
+    "$DATABASE" "$@" --profile "$PROFILE" \
+    >"$RESULT_DIRECTORY/$name.stdout" 2>"$RESULT_DIRECTORY/$name.stderr"
+  [[ ! -s "$RESULT_DIRECTORY/$name.stderr" ]]
+}
+
+denied() {
+  local name="$1"
+  local pattern="$2"
+  local status
+  shift 2
+  set +e
+  perl -e 'alarm shift; exec @ARGV' 60 \
+    "$DATABASE" "$@" --profile "$PROFILE" \
+    >"$RESULT_DIRECTORY/$name.stdout" 2>"$RESULT_DIRECTORY/$name.stderr"
+  status=$?
+  set -e
+  [[ "$status" != "0" ]]
+  rg -q "$pattern" "$RESULT_DIRECTORY/$name.stderr"
+}
+
+setup schema-plan schema plan "@$RESULT_DIRECTORY/schema.json"
+fingerprint="$(ruby -rjson -e \
+  'plan = JSON.parse(File.read(ARGV[0])); abort "expected schema plan" unless plan.fetch("type") == "schemaPlan"; value = plan.fetch("currentFingerprint"); abort "missing current fingerprint" unless value.is_a?(String) && !value.empty?; puts value' \
+  "$RESULT_DIRECTORY/schema-plan.stdout")"
+setup schema-apply schema apply "@$RESULT_DIRECTORY/schema.json" \
+  --expected-fingerprint "$fingerprint" --idempotency-key entity-policy-sample
+job_identity="$(ruby -rjson -e \
+  'job = JSON.parse(File.read(ARGV[0])); abort "expected accepted schema job" unless job.fetch("event") == "accepted"; values = %w[id family kind].map { |key| job.fetch(key) }; abort "invalid schema job identity" unless values.all? { |value| value.is_a?(String) && !value.empty? && !value.match?(/\s/) }; puts values.join(" ")' \
+  "$RESULT_DIRECTORY/schema-apply.stdout")"
+read -r job_id job_family job_kind <<<"$job_identity"
+setup schema-wait job wait "$job_id" "$job_family" "$job_kind" \
+  --poll-interval-milliseconds 100 --wait-timeout-milliseconds 30000
+ruby -rjson -e \
+  'status = JSON.parse(File.read(ARGV[0])); abort "schema application did not succeed" unless status.fetch("state") == "succeeded"' \
+  "$RESULT_DIRECTORY/schema-wait.stdout"
+setup entity-apply entity apply "@$RESULT_DIRECTORY/entities.json" \
+  --idempotency-key entity-policy-sample-insert
+
+denied sql-update-denied '"sqlState":"42501"' sql execute \
+  "UPDATE \"EntityPolicySample\" SET title = 'changed' WHERE id = 'sample-0001'"
+denied sql-delete-denied '"sqlState":"42501"' sql execute \
+  "DELETE FROM \"EntityPolicySample\" WHERE id = 'sample-0002'"
+denied entity-delete-denied '^error: ACCESS_DENIED:' entity delete EntityPolicySample string:sample-0003 \
+  --idempotency-key entity-policy-sample-delete
+
+setup readback query sql 'SELECT id, title FROM "EntityPolicySample" ORDER BY id' \
+  --output json --page-size 250 --all --max-pages 4 \
+  --max-total-rows "$SAMPLE_COUNT" --max-total-bytes 8388608
+setup fixture-readback query sql 'SELECT id FROM "S01QueryPageFixture" ORDER BY id' \
+  --output json
+
+ruby -rjson - "$RESULT_DIRECTORY" "$SAMPLE_COUNT" <<'RUBY'
+root, count = ARGV[0], Integer(ARGV[1])
+read = ->(name) { JSON.parse(File.read(File.join(root, "#{name}.stdout"))) }
+string = lambda do |value|
+  raise "non-string value #{value.inspect}" unless value.fetch("$type") == "string"
+  value.fetch("value")
+end
+pages = read.call("readback")
+raise "sample page count" unless pages.length == 4
+raise "sample continuation lifecycle" unless pages.last.fetch("$continuation").nil?
+rows = pages.flat_map { |page| page.fetch("rows") }.map { |row| row.fetch("values").map(&string) }
+expected = (1..count).map { |index| id = format("sample-%04d", index); [id, "title-#{id}"] }
+raise "sample readback differs (#{rows.length} rows)" unless rows == expected
+fixture = read.call("fixture-readback").flat_map { |page| page.fetch("rows") }
+  .map { |row| row.fetch("values").map(&string) }
+raise "republished schema lost earlier entity data" unless fixture == [["first"], ["second"]]
+puts "Entity policy process: #{count}-record entity policy sample, denied update/delete, and schema republication passed"
+RUBY

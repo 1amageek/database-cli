@@ -278,7 +278,10 @@ configuration = {
   "host" => "127.0.0.1", "port" => Integer(port),
   "routing" => {"databaseID" => "main"},
   "tokenRegistryPath" => File.join(File.dirname(path), "tokens.json"),
-  "entityPolicies" => [{"entity" => "S01QueryPageFixture", "roles" => {"list" => ["admin"], "get" => ["admin"], "create" => ["admin"]}}]
+  "entityPolicies" => [
+    {"entity" => "S01QueryPageFixture", "roles" => {"list" => ["admin"], "get" => ["admin"], "create" => ["admin"]}},
+    {"entity" => "EntityPolicySample", "roles" => {"list" => ["admin"], "get" => ["admin"], "create" => ["admin"]}}
+  ]
 }
 File.open(path, File::WRONLY | File::CREAT | File::EXCL, 0600) { |file| file.write(JSON.generate(configuration)) }
 RUBY
@@ -313,6 +316,8 @@ RUBY
 
   bash "$ROOT_DIR/scripts/query-process-test" \
     "$DATABASE" "$PROCESS_PROFILE" "$RESULT_DIRECTORY/Query-$run_identifier"
+  bash "$ROOT_DIR/scripts/entity-policy-process-test" \
+    "$DATABASE" "$PROCESS_PROFILE" "$RESULT_DIRECTORY/EntityPolicy-$run_identifier"
 
   kill -INT "$SERVE_PID"
   set +e

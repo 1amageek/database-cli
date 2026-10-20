@@ -75,6 +75,11 @@ checks first, continuation, zero-row and aggregate JSON pages plus zero-row
 JSONL column events through the real authenticated SQL command. Duplicate
 labels, all five rich value cases and typed NULL retain their exact shape;
 stdout and stderr evidence is preserved in the reported result directory.
+Its `entity-policy-process-test` step republishes the schema with an entity
+whose launch `entityPolicies` grant the admin profile only list, get and
+create, applies a 1000-record sample in one atomic change, requires update and
+delete through `sql execute` (`42501`) and `entity delete` (`ACCESS_DENIED`) to
+be denied, and reads every sample record and the earlier fixture back intact.
 
 Native backend integration is owned by the adjacent Server package and uses
 the exact same three binaries:
