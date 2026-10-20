@@ -46,7 +46,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/1amageek/database-framework.git",
-            revision: "246a7fa5d3b96284ce138d268325c3abb29733e4",
+            revision: "99fe507c79d987bbeed51a8d9992ae969db473f7",
             traits: [
                 .trait(name: "AllRuntimeFeatures"),
                 .trait(
