@@ -189,6 +189,15 @@ operations to the bootstrap admin role; authentication alone grants no entity
 access. Schema publication and two entity inserts prepare the paginated SQL
 fixture through their existing public operations.
 
+The 26.1022.1 distribution ships version-matched `database`, `database-fdb`
+and `database-server` executables and pins Framework 26.1022.1 for the local
+companion. DatabaseClient and DatabaseKit retain their 26.1021.0 contracts.
+Patch updates preserve exact executable-version admission and the main CLI's
+client-only linkage; framework execution stays behind the server/companion
+boundary. Final process evidence covers SQL aggregate/window reads through
+`query.execute`, the complete SQL endpoint, typed failures, rollback and
+awaited service shutdown.
+
 Native runs copy source into a harness-owned working directory and always run
 `build-for-testing` before runtime injection and `test-without-building`.
 Focused runs accept repeatable `--only-testing` selectors with an explicit
