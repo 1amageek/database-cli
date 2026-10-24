@@ -22,7 +22,7 @@ private let singleDatabaseOperationFixtures: [SingleDatabaseOperationFixture] = 
     .init(arguments: ["inspect", "jobs"], operation: .capabilitiesDescribe),
     .init(arguments: ["inspect", "ontology", "world"], operation: .ontologyExecute),
     .init(arguments: ["inspect", "shapes", "urn:shapes"], operation: .shaclExecute),
-    .init(arguments: ["sql", "execute", "SELECT 1"], operation: .sqlExecute),
+    .init(arguments: ["sql", "execute", "SELECT 1"], operation: .queryExecute),
     .init(arguments: ["query", "sql", "SELECT 1"], operation: .queryExecute),
     .init(arguments: ["mutate", "sparql", "CLEAR DEFAULT"], operation: .mutationExecute),
     .init(arguments: ["graph", "page-rank", "--index", "social"], operation: .graphAlgorithm),

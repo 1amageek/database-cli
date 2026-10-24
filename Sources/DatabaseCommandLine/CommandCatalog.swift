@@ -564,7 +564,7 @@ private extension CommandCatalog {
             budget: true,
             parameters: true,
             baseTarget: true
-        ), capability: "sql.execute")
+        ), capability: "query.execute")
 
         for language in ["sql", "sparql"] {
             add(["query", language], 1...1, usage: "<statement|@path|@->", summary: "Execute a read-only \(language.uppercased()) statement.", options: remoteOptions(

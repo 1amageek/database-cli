@@ -409,11 +409,11 @@ No S06 runtime success is claimed by this design document.
 ## S17 Complete SQL Invocation
 
 `database sql execute <statement|@path|@->` invokes
-`DatabaseOperationCatalog.sqlExecute` through the existing authenticated
+`DatabaseOperationCatalog.queryExecute` through the existing authenticated
 session. There is no existing `sql` command family to supersede. The command
 consumes one bounded UTF-8 SQL input, canonical typed parameters, one execution
 budget and existing request metadata. It constructs
-`SQLExecuteOperation.Request(input: .text(...), parameters: ..., budget: ...)`.
+`QueryExecuteOperation.Request(input: .sql(...), parameters: ..., budget: ...)`.
 Kit owns that declaration and the bounded codec; Framework owns parsing,
 authority and single-request SQL execution.
 
@@ -476,3 +476,23 @@ directory. Parallel tests do not share a global null-device output sink.
 Client/runtime platform evidence retains its owning package; CLI does not
 duplicate the Framework semantic corpus. Exact test counts change only in the
 executable harness configuration alongside intentional behavioral coverage.
+
+
+## Canonical Query Execution
+
+SQL text, SQL blocks and semantic statements use the single query.execute
+contract and canonical QueryResult. The complete SQL command preserves ordered
+statement outcomes, affected counts and COPY bytes; explicit query pagination
+retains its existing fixed invocation, metadata, bounds and detached continuation.
+QueryLanguage and QueryInput belong to Kit rather than a transport descriptor.
+No SQL-only operation, alias, fallback or automatic mutation replay remains.
+Renderers preserve boolean/RDF/row/command/COPY/block distinctions and reject
+invalid nested outcomes. Existing JSON/JSONL event order remains stable.
+
+```text
+command -> canonical QueryInput -> DatabaseClient -> query.execute
+        -> typed QueryResult -> bounded output rendering
+```
+
+Existing output, parameter identity, diagnostic and process tests verify this
+migration. The actual authenticated server process remains the integration gate.

@@ -198,9 +198,9 @@ struct RemoteCommandExecutor: Sendable {
             guard sqlFormat == .json || sqlFormat == .jsonl else {
                 throw DatabaseCLIError(.input, "Complete SQL results require JSON or JSONL output")
             }
-            try renderer.renderSQL(
+            try renderer.renderCompleteQuery(
                 try await targetedClient(command).execute(
-                    DatabaseOperationCatalog.sqlExecute,
+                    DatabaseOperationCatalog.queryExecute,
                     request: builder.sqlRequest(command, execution: execution),
                     metadata: execution.metadata
                 ),
@@ -881,11 +881,11 @@ private extension RemoteCommandExecutor {
                 format: format
             )
         #if DATABASE_CLI_MULTI_BASE
-        case .capabilitiesDescribe, .schemaDescribe, .sqlExecute, .compositionExecute,
+        case .capabilitiesDescribe, .schemaDescribe, .compositionExecute,
              .grantExecute, .jobStart, .jobStatus, .jobResult, .jobCancel:
             throw DatabaseCLIError(.input, "Operation family does not support jobs")
         #else
-        case .capabilitiesDescribe, .schemaDescribe, .sqlExecute, .jobStart, .jobStatus,
+        case .capabilitiesDescribe, .schemaDescribe, .jobStart, .jobStatus,
              .jobResult, .jobCancel:
             throw DatabaseCLIError(.input, "Operation family does not support jobs")
         #endif
@@ -942,8 +942,7 @@ private extension RemoteCommandExecutor {
         case .grantExecute: "grantExecute"
         #endif
         case .queryExecute: "queryExecute"
-        case .sqlExecute: "sqlExecute"
-        case .mutationExecute: "mutationExecute"
+                case .mutationExecute: "mutationExecute"
         case .graphAlgorithm: "graphAlgorithm"
         case .ontologyExecute: "ontologyExecute"
         case .shaclExecute: "shaclExecute"
@@ -968,7 +967,7 @@ private extension RemoteCommandExecutor {
         switch response {
         case .rows(let page): page.continuation
         case .rdfGraph(let page): page.continuation
-        case .boolean: nil
+        case .boolean, .command, .copy, .block: nil
         }
     }
 

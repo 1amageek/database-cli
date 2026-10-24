@@ -214,9 +214,9 @@ struct WireRequestBuilder: Sendable {
     #endif
 
     func queryInput(
-        language: QueryExecuteOperation.Language,
+        language: QueryLanguage,
         specification: String
-    ) throws -> QueryExecuteOperation.Input {
+    ) throws -> QueryInput {
         .text(language: language, statement: try input.read(specification))
     }
 
@@ -306,9 +306,9 @@ struct WireRequestBuilder: Sendable {
     func sqlRequest(
         _ command: ParsedCommand,
         execution: ExecutionOptions
-    ) throws -> SQLExecuteOperation.Request {
-        SQLExecuteOperation.Request(
-            input: .text(try input.read(command.positionals[0])),
+    ) throws -> QueryExecuteOperation.Request {
+        QueryExecuteOperation.Request(
+            input: .sql(try input.read(command.positionals[0])),
             parameters: try parameters(command.options),
             budget: execution.budget
         )
@@ -1095,7 +1095,7 @@ private extension WireRequestBuilder {
 
     func queryLanguage(
         _ command: ParsedCommand
-    ) throws -> QueryExecuteOperation.Language {
+    ) throws -> QueryLanguage {
         switch command.path.last {
         case "sql": return .sql
         case "sparql": return .sparql

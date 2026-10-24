@@ -16,7 +16,7 @@ struct SQLExecutionTests {
         #expect(command.path == ["sql", "execute"])
         #expect(try CommandParser().parse(ShellLexer().parse(ShellLexer().join(arguments))) == command)
         let descriptor = try #require(CommandCatalog.standard.command(for: command.path))
-        #expect(descriptor.capability == "sql.execute")
+        #expect(descriptor.capability == "query.execute")
         for option in ["page-size", "continuation", "all", "as-job", "graph-partitions"] {
             #expect(descriptor.option(named: option) == nil)
             #expect(throws: DatabaseCLIError.self) {
@@ -35,9 +35,16 @@ struct SQLExecutionTests {
     @Test("Complete ordered results retain empty schemas duplicate columns counts and COPY bytes")
     func rendersOrderedResults() async throws {
         let response = try sqlResponse()
+        let first = try #require(response.results.first)
+        let (_, completeRows, _) = try await withSQLOutput { output in
+            try ResultRenderer(output: output).renderQuery(first, format: .json)
+        }
+        #if DATABASE_CLI_MULTI_BASE
+        #expect(completeRows.contains("\"$consistency\":null"))
+        #endif
         for format in [OutputFormat.json, .jsonl] {
             let (_, stdout, stderr) = try await withSQLOutput { output in
-                try ResultRenderer(output: output).renderSQL(response, format: format)
+                try ResultRenderer(output: output).renderCompleteQuery(response, format: format)
             }
             let events = try format == .json
                 ? StrictJSONParser().parse(stdout).array(named: "results")
@@ -62,6 +69,38 @@ struct SQLExecutionTests {
             #expect(try objects[3].required("affectedRows") == .string("2"))
             #expect(try objects[4].required("command") == .string("rollback"))
             #expect(try objects[4].required("affectedRows") == .null)
+        }
+    }
+
+    @Test("Complete Boolean and RDF outcomes preserve kinds and exact output accounting")
+    func rendersGraphOutcomes() async throws {
+        let quad = RDFQuad(subject: .iri(try RDFIRI("urn:s")),
+            predicate: RDFPredicateIRI(try RDFIRI("urn:p")), object: .iri(try RDFIRI("urn:o")))
+        #if DATABASE_CLI_MULTI_BASE
+        let consistency = DatabaseReadConsistency.transactional(try DomainReadPoint(domainID: "render-test", position: .version(1)))
+        let boolean = try QueryBooleanResult(value: true, provenance: nil, consistency: consistency)
+        let graph = try RDFGraphPage(quads: [quad], provenance: nil, consistency: consistency)
+        #else
+        let boolean = true
+        let graph = try RDFGraphPage(quads: [quad])
+        #endif
+        let response = try QueryExecuteOperation.Response(results: [.boolean(boolean), .rdfGraph(graph)])
+        for format in [OutputFormat.json, .jsonl] {
+            let (rendered, stdout, stderr) = try await withSQLOutput { output in
+                try ResultRenderer(output: output).renderCompleteQuery(response, format: format)
+            }
+            #expect(rendered.elementCount == 2)
+            #expect(rendered.byteCount == UInt64(stdout.utf8.count))
+            #expect(stderr.isEmpty)
+            let events = try format == .json
+                ? StrictJSONParser().parse(stdout).array(named: "results")
+                : stdout.split(separator: "\n").map { try StrictJSONParser().parse(String($0)) }
+            let first = try StrictJSONObject(events[0])
+            let second = try StrictJSONObject(events[1])
+            #expect(try first.required("kind") == .string("boolean"))
+            #expect(try first.required("value") == .bool(true))
+            #expect(try second.required("kind") == .string("rdfGraph"))
+            #expect(try second.required("quads").array(named: "quads").count == 1)
         }
     }
 
@@ -92,15 +131,15 @@ struct SQLExecutionTests {
         try sqlParameterJSON.write(to: parameterURL, atomically: false, encoding: .utf8)
         let calls = Mutex(0)
         let transport = SQLCLITransport { bytes in
-            let decoded = try DatabaseWireDecoder().decodeRequest(DatabaseOperationCatalog.sqlExecute, from: bytes)
+            let decoded = try DatabaseWireDecoder().decodeRequest(DatabaseOperationCatalog.queryExecute, from: bytes)
             calls.withLock { $0 += 1 }
-            #expect(decoded.request.input == .text(sql))
+            #expect(decoded.request.input == .sql(sql))
             #expect(decoded.request.parameters == [sqlParameter])
             #expect(decoded.request.budget.maximumRows == 3)
             #expect(decoded.metadata.traceID == "file-request")
             try FileManager.default.removeItem(at: sqlURL)
             try FileManager.default.removeItem(at: parameterURL)
-            return try DatabaseWireEncoder().encodeResponse(DatabaseOperationCatalog.sqlExecute,
+            return try DatabaseWireEncoder().encodeResponse(DatabaseOperationCatalog.queryExecute,
                 requestID: decoded.requestID, response: .init(results: [.command(.rollback, affectedRows: nil)]))
         }
         let command = try CommandParser().parse(sqlArguments([
@@ -130,7 +169,7 @@ struct SQLExecutionTests {
             let first = calls.withLock { value in value += 1; return value == 1 }
             #expect(decoded.request.input == .text(language: .sql, statement: sql))
             #expect(decoded.request.parameters == [sqlParameter])
-            #expect(decoded.request.page.continuation == (first ? nil : token))
+            #expect(decoded.request.page?.continuation == (first ? nil : token))
             if first {
                 try FileManager.default.removeItem(at: sqlURL)
                 try FileManager.default.removeItem(at: parameterURL)
@@ -161,8 +200,9 @@ struct SQLExecutionTests {
         let columns = [try QueryColumn(number: 1, name: "value", type: .sql(.text), isNullable: true)]
         let transport = SQLCLITransport { bytes in
             let decoded = try DatabaseWireDecoder().decodeRequest(DatabaseOperationCatalog.queryExecute, from: bytes)
-            let first = limits.withLock { value in value.append(decoded.request.page.limit); return value.count == 1 }
-            #expect(decoded.request.page.continuation == (first ? nil : token))
+            let requestedPage = try #require(decoded.request.page)
+            let first = limits.withLock { value in value.append(requestedPage.limit); return value.count == 1 }
+            #expect(decoded.request.page?.continuation == (first ? nil : token))
             let rows = (first ? ["a", "b"] : ["c"]).map { QueryRow(values: [.primitive(.string($0))]) }
             #if DATABASE_CLI_MULTI_BASE
             let page = try QueryRowPage(columns: columns, rows: rows, continuation: first ? token : nil,
@@ -192,7 +232,7 @@ struct SQLExecutionTests {
         let shutdowns = Mutex(0)
         let transport = SQLCLITransport { bytes in
             let envelope = try DatabaseWireDecoder().decodeRequestEnvelope(bytes)
-            return try DatabaseWireEncoder().encodeFailure(requestID: envelope.requestID, operation: .sqlExecute, error: failure)
+            return try DatabaseWireEncoder().encodeFailure(requestID: envelope.requestID, operation: .queryExecute, error: failure)
         }
         let (status, stdout, stderr) = try await withSQLOutput { output in
             let app = DatabaseCLIApplication(credentials: CredentialResolver(store: SQLCredentialStore(), environment: [:]),
@@ -255,12 +295,12 @@ private func sqlRow() throws -> QueryRow {
     QueryRow(values: [.numeric(try QueryNumericValue(value: ExactDecimal(coefficient: 123, scale: 2), displayScale: 4)), .primitive(.null)])
 }
 
-private func sqlResponse() throws -> SQLExecuteOperation.Response {
+private func sqlResponse() throws -> QueryExecuteOperation.Response {
     let columns = [
         try QueryColumn(number: 1, name: "value", type: .sql(.decimal(precision: nil, scale: nil)), isNullable: false),
         try QueryColumn(number: 2, name: "value", type: .sql(.text), isNullable: true),
     ]
-    return .init(results: [
+    return try .init(results: [
         .rows(try .init(columns: columns, rows: [sqlRow()], affectedRows: 1)),
         .rows(try .init(columns: columns, rows: [])),
         .copy(bytes: ByteString([0, 255, 10]), affectedRows: 1),

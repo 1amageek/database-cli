@@ -45,7 +45,7 @@ private let operationFixtures: [OperationFixture] = [
     .init(arguments: ["inspect", "jobs"], operation: .capabilitiesDescribe, target: .database),
     .init(arguments: ["inspect", "ontology", "world", "--base", "company-a"], operation: .ontologyExecute, target: .base("company-a")),
     .init(arguments: ["inspect", "shapes", "urn:shapes", "--base", "company-a"], operation: .shaclExecute, target: .base("company-a")),
-    .init(arguments: ["sql", "execute", "SELECT 1", "--base", "company-a"], operation: .sqlExecute, target: .base("company-a")),
+    .init(arguments: ["sql", "execute", "SELECT 1", "--base", "company-a"], operation: .queryExecute, target: .base("company-a")),
     .init(arguments: ["query", "sql", "SELECT 1", "--base", "company-a"], operation: .queryExecute, target: .base("company-a")),
     .init(arguments: ["mutate", "sparql", "CLEAR DEFAULT", "--base", "company-a"], operation: .mutationExecute, target: .base("company-a")),
     .init(arguments: ["graph", "page-rank", "--index", "social", "--base", "company-a"], operation: .graphAlgorithm, target: .base("company-a")),

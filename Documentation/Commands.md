@@ -184,7 +184,7 @@ is rejected by mutation commands. There is no long-lived server transaction.
 ## Complete SQL requests
 
 `database sql execute <statement|@path|@->` sends one complete SQL text request
-through `sql.execute`. Input and typed parameters are read once. The server
+through the complete `query.execute` profile. Input and typed parameters are read once. The server
 parses and executes the entire request, then returns ordered outcomes only
 after authoritative commit or rollback and resource closure. SQL transaction
 controls, settings and prepared statements belong to that one request and do

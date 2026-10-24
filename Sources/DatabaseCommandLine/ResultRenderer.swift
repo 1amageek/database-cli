@@ -149,6 +149,8 @@ public struct ResultRenderer: Sendable {
                 format: format,
                 jsonFraming: jsonFraming
             )
+        case .command, .copy, .block:
+            return try renderCompleteQuery(response, format: format)
         }
     }
 
@@ -249,7 +251,7 @@ public struct ResultRenderer: Sendable {
             #if DATABASE_CLI_MULTI_BASE
             let metadata: [(key: String, value: StrictJSONValue)] = [
                 ("$continuation", page.continuation.map { .string(Base64URL.encode($0)) } ?? .null),
-                ("$consistency", consistencyNode(page.consistency)),
+                ("$consistency", page.consistency.map(consistencyNode) ?? .null),
             ]
             #else
             let metadata: [(key: String, value: StrictJSONValue)] = [
@@ -413,7 +415,7 @@ public struct ResultRenderer: Sendable {
     }
 
     #if DATABASE_CLI_MULTI_BASE
-    private func rowProvenanceNode(
+    func rowProvenanceNode(
         _ provenance: CompositionPageProvenance?,
         iterator: inout CompositionOriginIterator?
     ) throws -> StrictJSONValue? {
@@ -427,7 +429,7 @@ public struct ResultRenderer: Sendable {
         return provenanceNode(provenance, origin: origin)
     }
 
-    private func requireOriginsExhausted(
+    func requireOriginsExhausted(
         _ iterator: inout CompositionOriginIterator?
     ) throws {
         guard try iterator?.next() == nil else {
@@ -438,7 +440,7 @@ public struct ResultRenderer: Sendable {
         }
     }
 
-    private func provenanceNode(
+    func provenanceNode(
         _ provenance: CompositionPageProvenance,
         origin: CompositionOrigin
     ) -> StrictJSONValue {
@@ -533,14 +535,14 @@ public struct ResultRenderer: Sendable {
     #if DATABASE_CLI_MULTI_BASE
     private func renderPageMetadata(
         continuation: ByteString?,
-        consistency: DatabaseReadConsistency,
+        consistency: DatabaseReadConsistency?,
         format: OutputFormat,
         bytes: inout UInt64
     ) throws {
         let metadata = StrictJSONWriter.encode(
             .object([
                 ("$continuation", continuation.map { .string(Base64URL.encode($0)) } ?? .null),
-                ("$consistency", consistencyNode(consistency)),
+                ("$consistency", consistency.map(consistencyNode) ?? .null),
             ])
         )
         if format == .jsonl {
@@ -550,7 +552,7 @@ public struct ResultRenderer: Sendable {
         }
     }
 
-    private func consistencyNode(
+    func consistencyNode(
         _ consistency: DatabaseReadConsistency
     ) -> StrictJSONValue {
         switch consistency {
