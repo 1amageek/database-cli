@@ -1,7 +1,7 @@
 #!/bin/sh
 
 if [ "$1" = "--version" ]; then
-  printf '26.1022.1\n'
+  printf '26.1026.0\n'
   exit 0
 fi
 

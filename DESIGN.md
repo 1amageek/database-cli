@@ -496,3 +496,14 @@ command -> canonical QueryInput -> DatabaseClient -> query.execute
 
 Existing output, parameter identity, diagnostic and process tests verify this
 migration. The actual authenticated server process remains the integration gate.
+
+## Coordinated Release Contract
+
+The 26.1026.0 CLI and companion consume the published 26.1026.0 framework,
+Kit, Client and Storage releases through URL dependency resolution. The
+canonical executable version remains the source for companion and server
+compatibility checks. Distribution acceptance requires matching database,
+database-fdb and database-server candidates, real authenticated operations,
+all-backend round trips, link separation, authoritative shutdown and negative
+readiness. This update adds no authority, retry, resource-budget or
+transaction policy.
